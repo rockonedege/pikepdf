@@ -1,20 +1,21 @@
-# This Source Code Form is subject to the terms of the Mozilla Public
-# License, v. 2.0. If a copy of the MPL was not distributed with this
-# file, You can obtain one at http://mozilla.org/MPL/2.0/.
-#
-# Copyright (C) 2017, James R. Barlow (https://github.com/jbarlow83/)
+# SPDX-FileCopyrightText: 2022 James R. Barlow
+# SPDX-License-Identifier: MPL-2.0
+
+"""Implement pdfdoc codec."""
+
+from __future__ import annotations
 
 import codecs
-from typing import Container, Optional, Tuple
+from typing import Any, Container
 
-from ._qpdf import pdf_doc_to_utf8, utf8_to_pdf_doc
+from ._core import pdf_doc_to_utf8, utf8_to_pdf_doc
 
 # pylint: disable=redefined-builtin
 
 # See PDF Reference Manual 1.7, Table D.2.
 # The following generates set of all Unicode code points that can be encoded in
 # pdfdoc. Since pdfdoc is 8-bit, the vast majority of code points cannot be.
-#
+
 # Due to a bug, QPDF <= 10.5 and pikepdf < 5 had some inconsistencies around
 # PdfDocEncoding.
 PDFDOC_ENCODABLE = frozenset(
@@ -60,40 +61,51 @@ PDFDOC_ENCODABLE = frozenset(
 )
 
 
-def _find_first_index(
-    s: str, ordinals: Container[int], is_whitelist: bool = True
-) -> int:
+def _find_first_index(s: str, ordinals: Container[int]) -> int:
     for n, char in enumerate(s):
-        if is_whitelist and (ord(char) not in ordinals):
+        if ord(char) not in ordinals:
             return n
-        if not is_whitelist and (ord(char) in ordinals):
-            return n  # pragma: no cover
     raise ValueError("couldn't find the unencodable character")  # pragma: no cover
 
 
-def pdfdoc_encode(input: str, errors: str = 'strict') -> Tuple[bytes, int]:
+def pdfdoc_encode(input: str, errors: str = 'strict') -> tuple[bytes, int]:
+    """Convert input string to bytes in PdfDocEncoding."""
     error_marker = b'?' if errors == 'replace' else b'\xad'
     success, pdfdoc = utf8_to_pdf_doc(input, error_marker)
-    if not success:
-        if errors == 'strict':
-            # libqpdf doesn't return what character caused the error, and Python
-            # needs this, so make an educated guess and raise an exception based
-            # on that.
-            offending_index = _find_first_index(input, PDFDOC_ENCODABLE)
+    if success:
+        return pdfdoc, len(input)
+
+    if errors == 'ignore':
+        pdfdoc = pdfdoc.replace(b'\xad', b'')
+        return pdfdoc, len(input)
+    if errors == 'replace':
+        return pdfdoc, len(input)
+    if errors == 'strict':
+        if input.startswith('\xfe\xff') or input.startswith('\xff\xfe'):
             raise UnicodeEncodeError(
                 'pdfdoc',
                 input,
-                offending_index,
-                offending_index + 1,
-                "character cannot be represented in pdfdoc encoding",
+                0,
+                2,
+                "strings beginning with byte order marks cannot be encoded in pdfdoc",
             )
 
-        if errors == 'ignore':
-            pdfdoc = pdfdoc.replace(b'\xad', b'')
-    return pdfdoc, len(input)
+        # libqpdf doesn't return what character caused the error, and Python
+        # needs this, so make an educated guess and raise an exception based
+        # on that.
+        offending_index = _find_first_index(input, PDFDOC_ENCODABLE)
+        raise UnicodeEncodeError(
+            'pdfdoc',
+            input,
+            offending_index,
+            offending_index + 1,
+            "character cannot be represented in pdfdoc encoding",
+        )
+    raise LookupError(errors)
 
 
-def pdfdoc_decode(input: bytes, errors: str = 'strict') -> Tuple[str, int]:
+def pdfdoc_decode(input: bytes, errors: str = 'strict') -> tuple[str, int]:
+    """Convert PdfDoc-encoded input into a Python str."""
     if isinstance(input, memoryview):
         input = input.tobytes()
     s = pdf_doc_to_utf8(input)
@@ -112,35 +124,54 @@ def pdfdoc_decode(input: bytes, errors: str = 'strict') -> Tuple[str, int]:
 
 
 class PdfDocCodec(codecs.Codec):
-    """Implements PdfDocEncoding character map used inside PDFs."""
+    """Implement PdfDocEncoding character map used inside PDFs."""
 
-    def encode(self, input: str, errors: str = 'strict') -> Tuple[bytes, int]:
+    def encode(self, input: str, errors: str = 'strict') -> tuple[bytes, int]:
+        """Implement codecs.Codec.encode for pdfdoc."""
         return pdfdoc_encode(input, errors)
 
-    def decode(self, input: bytes, errors: str = 'strict') -> Tuple[str, int]:
+    def decode(self, input: bytes, errors: str = 'strict') -> tuple[str, int]:
+        """Implement codecs.Codec.decode for pdfdoc."""
         return pdfdoc_decode(input, errors)
 
 
 class PdfDocStreamWriter(PdfDocCodec, codecs.StreamWriter):
-    pass
+    """Implement PdfDocEncoding stream writer."""
 
 
 class PdfDocStreamReader(PdfDocCodec, codecs.StreamReader):
-    def decode(self, input: bytes, errors: str = 'strict') -> Tuple[str, int]:
+    """Implement PdfDocEncoding stream reader."""
+
+    def decode(self, input: bytes, errors: str = 'strict') -> tuple[str, int]:
+        """Implement codecs.StreamReader.decode for pdfdoc."""
         return PdfDocCodec.decode(self, input, errors)
 
 
 class PdfDocIncrementalEncoder(codecs.IncrementalEncoder):
+    """Implement PdfDocEncoding incremental encoder."""
+
     def encode(self, input: str, final: bool = False) -> bytes:
+        """Implement codecs.IncrementalEncoder.encode for pdfdoc."""
         return pdfdoc_encode(input, 'strict')[0]
 
 
 class PdfDocIncrementalDecoder(codecs.IncrementalDecoder):
-    def decode(self, input: bytes, final: bool = False) -> str:
-        return pdfdoc_decode(input, 'strict')[0]
+    """Implement PdfDocEncoding incremental decoder."""
+
+    def decode(self, input: Any, final: bool = False) -> str:  # type: ignore
+        """Implement codecs.IncrementalDecoder.decode for pdfdoc."""
+        return pdfdoc_decode(bytes(input), 'strict')[0]
 
 
-def find_pdfdoc(encoding: str) -> Optional[codecs.CodecInfo]:
+def find_pdfdoc(encoding: str) -> codecs.CodecInfo | None:
+    """Register pdfdoc codec with Python.
+
+    Both pdfdoc and pdfdoc_pikepdf are registered. Use "pdfdoc_pikepdf" if pikepdf's
+    codec is required. If another third party package installs a codec named pdfdoc,
+    the first imported by Python will be registered and will service all encoding.
+    Unfortunately, Python's codec infrastructure does not give a better mechanism
+    for resolving conflicts.
+    """
     if encoding in ('pdfdoc', 'pdfdoc_pikepdf'):
         codec = PdfDocCodec()
         return codecs.CodecInfo(

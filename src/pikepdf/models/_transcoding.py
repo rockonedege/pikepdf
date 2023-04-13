@@ -1,11 +1,10 @@
-# This Source Code Form is subject to the terms of the Mozilla Public
-# License, v. 2.0. If a copy of the MPL was not distributed with this
-# file, You can obtain one at http://mozilla.org/MPL/2.0/.
-#
-# Copyright (C) 2022, James R. Barlow (https://github.com/jbarlow83/)
+# SPDX-FileCopyrightText: 2022 James R. Barlow
+# SPDX-License-Identifier: MPL-2.0
+
+from __future__ import annotations
 
 import struct
-from typing import Any, Callable, List, NamedTuple, Optional, Tuple, Union
+from typing import Any, Callable, NamedTuple, Union
 
 from PIL import Image
 from PIL.TiffTags import TAGS_V2 as TIFF_TAGS
@@ -15,7 +14,7 @@ MutableBytesLike = Union[bytearray, memoryview]
 
 
 def _next_multiple(n: int, k: int) -> int:
-    """Returns the multiple of k that is greater than or equal n.
+    """Return the multiple of k that is greater than or equal n.
 
     >>> _next_multiple(101, 4)
     104
@@ -29,8 +28,8 @@ def _next_multiple(n: int, k: int) -> int:
 
 
 def unpack_subbyte_pixels(
-    packed: BytesLike, size: Tuple[int, int], bits: int, scale: int = 0
-) -> Tuple[BytesLike, int]:
+    packed: BytesLike, size: tuple[int, int], bits: int, scale: int = 0
+) -> tuple[BytesLike, int]:
     """Unpack subbyte *bits* pixels into full bytes and rescale.
 
     When scale is 0, the appropriate scale is calculated.
@@ -98,7 +97,7 @@ def _4bit_inner_loop(in_: BytesLike, out: MutableBytesLike, scale: int) -> None:
         out[2 * n + 1] = int((val & 0b1111) * scale)
 
 
-def image_from_byte_buffer(buffer: BytesLike, size: Tuple[int, int], stride: int):
+def image_from_byte_buffer(buffer: BytesLike, size: tuple[int, int], stride: int):
     """Use Pillow to create one-component image from a byte buffer.
 
     *stride* is the number of bytes per row, and is essential for packed bits
@@ -125,7 +124,7 @@ def _depalettize_cmyk(buffer: BytesLike, palette: BytesLike):
 
 def image_from_buffer_and_palette(
     buffer: BytesLike,
-    size: Tuple[int, int],
+    size: tuple[int, int],
     stride: int,
     base_mode: str,
     palette: BytesLike,
@@ -135,7 +134,6 @@ def image_from_buffer_and_palette(
     1/2/4-bit images must be unpacked (no scaling!) to byte buffers first, such
     that every 8-bit integer is an index into the palette.
     """
-
     # Reminder Pillow palette byte order unintentionally changed in 8.3.0
     # https://github.com/python-pillow/Pillow/issues/5595
     # 8.2.0: all aligned by channel (very nonstandard)
@@ -166,8 +164,10 @@ def fix_1bit_palette_image(
     im = im.convert('P')
     if base_mode == 'RGB' and len(palette) == 6:
         # rgbrgb -> rgb000000...rgb
-        palette = palette[0:3] + (b'\x00\x00\x00' * (256 - 2)) + palette[3:6]
-        im.putpalette(palette, rawmode='RGB')
+        expanded_palette = b''.join(
+            [palette[0:3], (b'\x00\x00\x00' * (256 - 2)), palette[3:6]]
+        )
+        im.putpalette(expanded_palette, rawmode='RGB')
     elif base_mode == 'L':
         try:
             im.putpalette(palette, rawmode='L')
@@ -179,12 +179,14 @@ def fix_1bit_palette_image(
 
 
 def generate_ccitt_header(
-    size: Tuple[int, int],
+    size: tuple[int, int],
     data_length: int,
     ccitt_group: int,
+    t4_options: int | None,
     photometry: int,
     icc: bytes,
 ) -> bytes:
+    """Generate binary CCITT header for image with given parameters."""
     tiff_header_struct = '<' + '2s' + 'H' + 'L' + 'H'
 
     tag_keys = {tag.name: key for key, tag in TIFF_TAGS.items()}  # type: ignore
@@ -194,9 +196,9 @@ def generate_ccitt_header(
         key: int
         typecode: Any
         count_: int
-        data: Union[int, Callable[[], Optional[int]]]
+        data: int | Callable[[], int | None]
 
-    ifds: List[IFD] = []
+    ifds: list[IFD] = []
 
     def header_length(ifd_count) -> int:
         return (
@@ -205,9 +207,7 @@ def generate_ccitt_header(
             + 4
         )
 
-    def add_ifd(
-        tag_name: str, data: Union[int, Callable[[], Optional[int]]], count: int = 1
-    ):
+    def add_ifd(tag_name: str, data: int | Callable[[], int | None], count: int = 1):
         key = tag_keys[tag_name]
         typecode = TIFF_TAGS[key].type  # type: ignore
         ifds.append(IFD(key, typecode, count, data))
@@ -218,6 +218,8 @@ def generate_ccitt_header(
     add_ifd('ImageLength', height)
     add_ifd('BitsPerSample', 1)
     add_ifd('Compression', ccitt_group)
+    if t4_options is not None:
+        add_ifd('T4Options', t4_options)
     add_ifd('PhotometricInterpretation', int(photometry))
     add_ifd('StripOffsets', lambda: image_offset)
     add_ifd('RowsPerStrip', height)

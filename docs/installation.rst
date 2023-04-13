@@ -162,7 +162,7 @@ libqpdf.)
     precise both **must** use the same C++ ABI. On some platforms, setup.py may
     not pick the correct compiler so one may need to set environment variables
     ``CC`` and ``CXX`` to redirect it. If the wrong compiler is selected,
-    ``import pikepdf._qpdf`` will throw an ``ImportError`` about a missing
+    ``import pikepdf._core`` will throw an ``ImportError`` about a missing
     symbol.
 
 :fa:`linux` :fa:`apple` GCC or Clang, linking to system libraries
@@ -185,7 +185,7 @@ because pikepdf requires a newer version than your operating system has),
 then you might do something like:
 
 -  Install the development headers for libjpeg and zlib (e.g. ``apt install libjpeg-dev``)
--  Build qpdf from source and run ``make install`` to install it to ``/usr/local``
+-  Build qpdf from source and run ``cmake --install`` to install it to ``/usr/local``
 -  Clone the pikepdf repository
 -  From the pikepdf directory, run
 
@@ -243,20 +243,24 @@ recent version of QPDF than your operating system package manager provides, and 
 do not want to use Python wheels.
 
 * Set the environment variable ``QPDF_SOURCE_TREE`` to the location of the QPDF source
-  tree.
+  tree. Set the environment variable ``QPDF_BUILD_LIBDIR`` to the directory that
+  contains the shared library built by cmake from this source tree. Typically this
+  will be ``.../build/libqpdf`` where ``.../build`` represents the cmake build
+  directory. If you are using a multi-configuration generator, it may be in a
+  subdirectory of that.
 
-* Build QPDF, by running ``make``. Refer to the QPDF installation instructions for
+* Build QPDF, by running ``cmake``. Refer to the QPDF installation instructions for
   further options and details.
 
 * On Linux, modify ``LD_LIBRARY_PATH``, prepending the path where the QPDF build
-  produces ``libqpdfXX.so``. This might be something like
-  ``$QPDF_SOURCE_TREE/.build/libs/libqpdfXX.so``. On macOS, locate the equivalent
+  produces ``libqpdfXX.so``. This is the same directory you assigned the
+  ``QPDF_BUILD_LIBRARY`` environment variable to. On macOS, the equivalent
   variable is ``DYLD_LIBRARY_PATH``. On Windows, no action is needed. Generally,
   what you are doing here is telling the runtime dynamic linker to use the custom
   compiled version of QPDF instead of the system version.
 
 * Build pikepdf. On Windows, locate the QPDF .dll files and copy them into the folder
-  alongside the file named ``_qpdf*.dll``.
+  alongside the file named ``_core*.pyd``.
 
 Note that the Python wheels for pikepdf currently compile their own version of
 QPDF and several of its dependencies to ensure the wheels have the latest version.
@@ -277,9 +281,8 @@ regenerate it:
 PyPy3 support
 -------------
 
-PyPy3 3.7 is currently supported, these being the latest versions of PyPy
-as of this writing. Windows PyPy wheels are not supported because cibuildwheel
-does not support Windows 64-bit PyPy. We have not checked if source builds work.
+PyPy3 is supported in certain configurations as listed in the binary wheel
+availability table above.
 
 PyPy3 is not more performant than CPython for pikepdf, because the core of pikepdf
 is already written in C++. The benefit is for applications that want to use PyPy

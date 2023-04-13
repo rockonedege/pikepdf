@@ -1,12 +1,17 @@
-import pytest
-from conftest import needs_libqpdf_v
+# SPDX-FileCopyrightText: 2022 James R. Barlow
+# SPDX-License-Identifier: CC0-1.0
 
-from pikepdf import Annotation, Dictionary, Name, Pdf
+from __future__ import annotations
+
+import pytest
+
+from pikepdf import Annotation, Name, Pdf
 
 
 @pytest.fixture
 def form(resources):
-    yield Pdf.open(resources / 'form.pdf')
+    with Pdf.open(resources / 'form.pdf') as pdf:
+        yield pdf
 
 
 def test_button(form):
@@ -36,3 +41,10 @@ def test_checkbox(form):
         annot.get_page_content_for_appearance(Name.XYZ, 0)
         == b'q\n1 0 0 1 4.41818 3.10912 cm\n/XYZ Do\nQ\n'
     )
+
+
+def test_annot_eq(form):
+    button = Annotation(form.Root.AcroForm.Fields[1])
+    checkbox = Annotation(form.Root.AcroForm.Fields[2])
+    assert button != checkbox
+    assert button == button

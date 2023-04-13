@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2022 James R. Barlow
+# SPDX-License-Identifier: MPL-2.0
 ---
 Language: Cpp
 BasedOnStyle: LLVM
@@ -37,7 +39,7 @@ IndentPPDirectives: AfterHash
 IndentWidth: 4
 PointerAlignment: Right
 SpaceAfterCStyleCast: false
-SortIncludes: no
+SortIncludes: Never
 Standard: c++17
 TabWidth: 4
 UseTab: Never

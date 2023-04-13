@@ -1,5 +1,9 @@
+# SPDX-FileCopyrightText: 2022 James R. Barlow
+# SPDX-License-Identifier: CC0-1.0
+
+from __future__ import annotations
+
 import shutil
-import sys
 from subprocess import PIPE, run
 
 import pytest
@@ -17,11 +21,11 @@ from pikepdf import (
     PdfInlineImage,
     PdfMatrix,
     Stream,
-    _qpdf,
+    _core,
     parse_content_stream,
     unparse_content_stream,
 )
-from pikepdf._qpdf import StreamParser
+from pikepdf._core import StreamParser
 from pikepdf.models import PdfParsingError
 
 # pylint: disable=useless-super-delegation,redefined-outer-name
@@ -61,7 +65,7 @@ class ExceptionParser(StreamParser):
 
 def slow_unparse_content_stream(instructions):
     def encode(obj):
-        return _qpdf.unparse(obj)
+        return _core.unparse(obj)
 
     def encode_iimage(iimage: PdfInlineImage):
         return iimage.unparse()
@@ -152,10 +156,10 @@ def test_invalid_stream_object():
     with pytest.raises(TypeError, match="called on page or stream"):
         parse_content_stream(Dictionary({"/Hi": 3}))
 
+    false_page = Dictionary(Type=Name.Page, Contents=42)
     with pytest.raises(
         TypeError, match="parse_content_stream called on non-stream Object"
     ):
-        false_page = Dictionary(Type=Name.Page, Contents=42)
         parse_content_stream(false_page)
 
 
@@ -203,7 +207,7 @@ def test_parse_results(inline):
     cmds = parse_content_stream(p0)
     assert isinstance(cmds[0], ContentStreamInstruction)
     csi = cmds[0]
-    assert isinstance(csi.operands, _qpdf._ObjectList)
+    assert isinstance(csi.operands, _core._ObjectList)
     assert isinstance(csi.operator, Operator)
     assert 'Operator' in repr(csi)
 
@@ -257,9 +261,35 @@ def test_inline_copy(inline):
         if not isinstance(instr, ContentStreamInlineImage):
             continue
         csiimage = instr
-        _copy_of_csiimage = ContentStreamInlineImage(csiimage)  # noqa: F841
+        _copy_of_csiimage = ContentStreamInlineImage(csiimage)
         new_iimage = ContentStreamInlineImage(csiimage.iimage)
         assert unparse_content_stream([new_iimage]).startswith(b'BI')
+
+
+def test_end_inline_parse():
+    pdf = pikepdf.new()
+    pdf.add_blank_page(page_size=(1000, 1000))
+    stream = b"""
+        q 200 0 0 200 500 500 cm
+        BI
+        /W 1
+        /H 1
+        /BPC 8
+        /CS /RGB
+        ID \x80\x80\x80
+        EI Q
+        q 300 0 0 300 500 200 cm
+        BI
+        /W 2
+        /H 2
+        /BPC 8
+        /CS /RGB
+        ID \xff\x00\x00\x00\xff\x00\x00\xff\x00\x00\x00\xff
+        EI Q
+        """
+    pdf.pages[0].Contents = pdf.make_stream(stream)
+    cs = parse_content_stream(pdf.pages[0])
+    assert unparse_content_stream(cs).split() == stream.split()
 
 
 class TestMalformedContentStreamInstructions:

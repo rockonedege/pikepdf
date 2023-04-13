@@ -1,3 +1,8 @@
+# SPDX-FileCopyrightText: 2022 James R. Barlow
+# SPDX-License-Identifier: CC0-1.0
+
+from __future__ import annotations
+
 import datetime
 import os
 from hashlib import md5
@@ -6,8 +11,8 @@ from pathlib import Path
 import pytest
 
 import pikepdf
-from pikepdf import Dictionary, Name, Pdf
-from pikepdf._qpdf import AttachedFile, AttachedFileSpec, Attachments
+from pikepdf import Name, Pdf
+from pikepdf._core import AttachedFile, AttachedFileSpec, Attachments
 
 
 @pytest.fixture
@@ -80,8 +85,13 @@ def test_filespec_types(pal, resources):
         fs_path.get_file(pikepdf.Array([1]))
 
 
-def test_attachment_metadata(pal):
-    fs = AttachedFileSpec(pal, b'some data', description='test filespec')
+def test_attachment_metadata(pal, data=b'some data', description='test filespec'):
+    fs = AttachedFileSpec(pal, data, description=description)
+
+    assert fs.description == description
+    fs.description = 'xyz'
+    assert fs.description == 'xyz'
+
     attached_stream = fs.get_file()
     assert attached_stream.creation_date is None
     assert attached_stream.mod_date is None
@@ -92,6 +102,12 @@ def test_attachment_metadata(pal):
     attached_stream.mod_date = june_1
     assert attached_stream.creation_date == june_1
     assert attached_stream.mod_date == june_1
+
+    assert attached_stream.size == len(data)
+
+    assert attached_stream.mime_type == ''
+    attached_stream.mime_type = 'text/plain'
+    assert attached_stream.mime_type == 'text/plain'
 
 
 def test_compound_attachment(pal):

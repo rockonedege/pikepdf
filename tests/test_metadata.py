@@ -1,3 +1,8 @@
+# SPDX-FileCopyrightText: 2022 James R. Barlow
+# SPDX-License-Identifier: CC0-1.0
+
+from __future__ import annotations
+
 import os
 import re
 from datetime import datetime, timedelta, timezone
@@ -5,7 +10,7 @@ from pathlib import Path
 from xml.etree import ElementTree as ET
 
 import pytest
-from conftest import skip_if_pypy
+from conftest import skip_if_pypy, skip_if_slow_cpu
 from hypothesis import assume, example, given, settings
 from hypothesis import strategies as st
 from hypothesis.strategies import integers
@@ -18,10 +23,9 @@ from pikepdf.models.metadata import (
     XMP_NS_PDF,
     XMP_NS_XMP,
     DateConverter,
+    PdfMetadata,
     decode_pdf_date,
 )
-
-pytestmark = pytest.mark.filterwarnings('ignore:.*XMLParser.*:DeprecationWarning')
 
 # pylint: disable=redefined-outer-name,pointless-statement
 
@@ -124,7 +128,7 @@ def test_update_info(graph, outdir):
         with pytest.raises(ValueError):
             new.docinfo = Dictionary({'/Keywords': 'bob'})
 
-        new.docinfo = graph.make_indirect(Dictionary({'/Keywords': 'bob'}))
+        new.docinfo = new.make_indirect(Dictionary({'/Keywords': 'bob'}))
         assert new.docinfo.is_indirect, "/Info must be an indirect object"
 
 
@@ -603,6 +607,7 @@ def test_random_docinfo(docinfo):
     )
 )
 @skip_if_pypy
+@skip_if_slow_cpu
 def test_random_valid_docinfo(docinfo):
     p = pikepdf.new()
     with p.open_metadata() as m:
@@ -728,3 +733,14 @@ def test_xxe(trivial, outdir):
     )
     with trivial.open_metadata() as m:
         assert 'This is a secret' not in str(m)
+
+
+def test_qname_no_namespace():
+    assert PdfMetadata._qname('abc') == '{adobe:ns:meta/}abc'
+
+
+def test_register_xmlns():
+    PdfMetadata.register_xml_namespace('http://github.com/pikepdf/pikepdf/', 'pikepdf')
+    assert (
+        PdfMetadata._qname('pikepdf:foo') == '{http://github.com/pikepdf/pikepdf/}foo'
+    )

@@ -1,19 +1,21 @@
-# This Source Code Form is subject to the terms of the Mozilla Public
-# License, v. 2.0. If a copy of the MPL was not distributed with this
-# file, You can obtain one at http://mozilla.org/MPL/2.0/.
-#
-# Copyright (C) 2020, Matthias Erll
-# Copyright (C) 2020, James R. Barlow (https://github.com/jbarlow83/)
+# SPDX-FileCopyrightText: 2022 James R. Barlow, 2020 Matthias Erll
 
+# SPDX-License-Identifier: MPL-2.0
+
+"""Support for document outlines (e.g. table of contents)."""
+
+from __future__ import annotations
 
 from enum import Enum
 from itertools import chain
-from typing import Iterable, List, Optional, Set, Tuple, Union, cast
+from typing import Iterable, List, cast
 
 from pikepdf import Array, Dictionary, Name, Object, Page, Pdf, String
 
 
 class PageLocation(Enum):
+    """Page view location definitions, from PDF spec."""
+
     XYZ = 1
     Fit = 2
     FitH = 3
@@ -38,24 +40,28 @@ ALL_PAGE_LOCATION_KWARGS = set(chain.from_iterable(PAGE_LOCATION_ARGS.values()))
 def make_page_destination(
     pdf: Pdf,
     page_num: int,
-    page_location: Optional[Union[PageLocation, str]] = None,
+    page_location: PageLocation | str | None = None,
     *,
-    left: Optional[float] = None,
-    top: Optional[float] = None,
-    right: Optional[float] = None,
-    bottom: Optional[float] = None,
-    zoom: Optional[float] = None,
+    left: float | None = None,
+    top: float | None = None,
+    right: float | None = None,
+    bottom: float | None = None,
+    zoom: float | None = None,
 ) -> Array:
-    """
-    Creates a destination ``Array`` with reference to a Pdf document's page number.
+    """Create a destination ``Array`` with reference to a Pdf document's page number.
 
     Arguments:
         pdf: PDF document object.
         page_num: Page number (zero-based).
         page_location: Optional page location, as a string or :enum:`PageLocation`.
-        left, top, right, bottom, zoom: Optional keyword arguments for specifying
-            a position on the page, used in conjunction with the page fit style
-            specified by *page_location*.
+        left: Specify page viewport rectangle.
+        top: Specify page viewport rectangle.
+        right: Specify page viewport rectangle.
+        bottom: Specify page viewport rectangle.
+        zoom: Specify page viewport rectangle's zoom level.
+
+    left, top, right, bottom, zoom are used in conjunction with the page fit style
+    specified by *page_location*.
     """
     return _make_page_destination(
         pdf,
@@ -72,12 +78,12 @@ def make_page_destination(
 def _make_page_destination(
     pdf: Pdf,
     page_num: int,
-    page_location: Optional[Union[PageLocation, str]] = None,
+    page_location: PageLocation | str | None = None,
     **kwargs,
 ) -> Array:
     kwargs = {k: v for k, v in kwargs.items() if v is not None}
 
-    res: List[Union[Dictionary, Name]] = [pdf.pages[page_num].obj]
+    res: list[Dictionary | Name] = [pdf.pages[page_num].obj]
     if page_location:
         if isinstance(page_location, PageLocation):
             loc_key = page_location
@@ -100,12 +106,13 @@ def _make_page_destination(
 
 
 class OutlineStructureError(Exception):
-    pass
+    """Indicates an error in the outline data structure."""
 
 
 class OutlineItem:
-    """Manages a single item in a PDF document outlines structure, including
-    nested items.
+    """Manage a single item in a PDF document outlines structure.
+
+    Includes nested items.
 
     Arguments:
         title: Title of the outlines item.
@@ -138,17 +145,18 @@ class OutlineItem:
     def __init__(
         self,
         title: str,
-        destination: Optional[Union[Array, String, Name, int]] = None,
-        page_location: Optional[Union[PageLocation, str]] = None,
-        action: Optional[Dictionary] = None,
-        obj: Optional[Dictionary] = None,
+        destination: Array | String | Name | int | None = None,
+        page_location: PageLocation | str | None = None,
+        action: Dictionary | None = None,
+        obj: Dictionary | None = None,
         *,
-        left: Optional[float] = None,
-        top: Optional[float] = None,
-        right: Optional[float] = None,
-        bottom: Optional[float] = None,
-        zoom: Optional[float] = None,
+        left: float | None = None,
+        top: float | None = None,
+        right: float | None = None,
+        bottom: float | None = None,
+        zoom: float | None = None,
     ):
+        """Initialize OutlineItem."""
         self.title = title
         self.destination = destination
         self.page_location = page_location
@@ -160,7 +168,7 @@ class OutlineItem:
         kwargs = dict(left=left, top=top, right=right, bottom=bottom, zoom=zoom)
         self.page_location_kwargs = {k: v for k, v in kwargs.items() if v is not None}
         self.is_closed = False
-        self.children: List[OutlineItem] = []
+        self.children: list[OutlineItem] = []
 
     def __str__(self):
         if self.children:
@@ -179,10 +187,16 @@ class OutlineItem:
                 dest = page.label
             elif isinstance(self.destination, String):
                 # 12.3.2.2 Named destination, byte string reference to Names
-                dest = f'<Named Destination in document .Root.Names dictionary: {self.destination}>'
+                dest = (
+                    f"<Named Destination in document .Root.Names dictionary: "
+                    f"{self.destination}>"
+                )
             elif isinstance(self.destination, Name):
-                # 12.3.2.2 Named desintation, name object (PDF 1.1)
-                dest = f'<Named Destination in document .Root.Dests dictionary: {self.destination}>'
+                # 12.3.2.2 Named destination, name object (PDF 1.1)
+                dest = (
+                    f"<Named Destination in document .Root.Dests dictionary: "
+                    f"{self.destination}>"
+                )
             elif isinstance(self.destination, int):
                 # Page number
                 dest = f'<Page {self.destination}>'
@@ -195,8 +209,9 @@ class OutlineItem:
 
     @classmethod
     def from_dictionary_object(cls, obj: Dictionary):
-        """Creates a ``OutlineItem`` from a PDF document's ``Dictionary``
-        object. Does not process nested items.
+        """Create a ``OutlineItem`` from a ``Dictionary``.
+
+        Does not process nested items.
 
         Arguments:
             obj: ``Dictionary`` object representing a single outline node.
@@ -218,8 +233,8 @@ class OutlineItem:
         return cls(title, destination=destination, action=action, obj=obj)
 
     def to_dictionary_object(self, pdf: Pdf, create_new: bool = False) -> Dictionary:
-        """Creates a ``Dictionary`` object from this outline node's data,
-        or updates the existing object.
+        """Create/update a ``Dictionary`` object from this outline node.
+
         Page numbers are resolved to a page reference on the input
         ``Pdf`` object.
 
@@ -252,8 +267,9 @@ class OutlineItem:
 
 
 class Outline:
-    """Maintains a intuitive interface for creating and editing PDF document outlines,
-    according to the |pdfrm| section 12.3.
+    """Maintains a intuitive interface for creating and editing PDF document outlines.
+
+    See |pdfrm| section 12.3.
 
     Arguments:
         pdf: PDF document object.
@@ -269,7 +285,8 @@ class Outline:
     """
 
     def __init__(self, pdf: Pdf, max_depth: int = 15, strict: bool = False):
-        self._root: Optional[List[OutlineItem]] = None
+        """Initialize Outline."""
+        self._root: list[OutlineItem] | None = None
         self._pdf = pdf
         self._max_depth = max_depth
         self._strict = strict
@@ -298,11 +315,11 @@ class Outline:
         parent: Dictionary,
         outline_items: Iterable[OutlineItem],
         level: int,
-        visited_objs: Set[Tuple[int, int]],
+        visited_objs: set[tuple[int, int]],
     ):
         count = 0
-        prev: Optional[Dictionary] = None
-        first: Optional[Dictionary] = None
+        prev: Dictionary | None = None
+        first: Dictionary | None = None
         for item in outline_items:
             out_obj = item.to_dictionary_object(self._pdf)
             objgen = out_obj.objgen
@@ -350,11 +367,11 @@ class Outline:
     def _load_level_outline(
         self,
         first_obj: Dictionary,
-        outline_items: List[Object],
+        outline_items: list[Object],
         level: int,
-        visited_objs: Set[Tuple[int, int]],
+        visited_objs: set[tuple[int, int]],
     ):
-        current_obj: Optional[Dictionary] = first_obj
+        current_obj: Dictionary | None = first_obj
         while current_obj:
             objgen = current_obj.objgen
             if objgen in visited_objs:
@@ -404,7 +421,8 @@ class Outline:
             self._load_level_outline(first_obj, root, 0, set())
 
     @property
-    def root(self) -> List[OutlineItem]:
+    def root(self) -> list[OutlineItem]:
+        """Return the root node of the outline."""
         if self._root is None:
             self._load()
         return cast(List[OutlineItem], self._root)

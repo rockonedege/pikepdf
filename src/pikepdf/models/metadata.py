@@ -1,8 +1,9 @@
-# This Source Code Form is subject to the terms of the Mozilla Public
-# License, v. 2.0. If a copy of the MPL was not distributed with this
-# file, You can obtain one at http://mozilla.org/MPL/2.0/.
-#
-# Copyright (C) 2018, James R. Barlow (https://github.com/jbarlow83/)
+# SPDX-FileCopyrightText: 2022 James R. Barlow
+# SPDX-License-Identifier: MPL-2.0
+
+"""PDF metadata handling."""
+
+from __future__ import annotations
 
 import logging
 import re
@@ -11,19 +12,7 @@ from abc import ABC, abstractmethod
 from datetime import datetime
 from functools import wraps
 from io import BytesIO
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    Callable,
-    Dict,
-    List,
-    NamedTuple,
-    Optional,
-    Set,
-    Type,
-    Union,
-    cast,
-)
+from typing import TYPE_CHECKING, Any, Callable, NamedTuple, Set
 from warnings import warn
 
 from lxml import etree
@@ -41,11 +30,17 @@ else:
 if TYPE_CHECKING:  # pragma: no cover
     from pikepdf import Pdf
 
+
 XMP_NS_DC = "http://purl.org/dc/elements/1.1/"
 XMP_NS_PDF = "http://ns.adobe.com/pdf/1.3/"
 XMP_NS_PDFA_ID = "http://www.aiim.org/pdfa/ns/id/"
+XMP_NS_PDFA_EXTENSION = "http://www.aiim.org/pdfa/ns/extension/"
+XMP_NS_PDFA_PROPERTY = "http://www.aiim.org/pdfa/ns/property#"
+XMP_NS_PDFA_SCHEMA = "http://www.aiim.org/pdfa/ns/schema#"
+XMP_NS_PDFUA_ID = "http://www.aiim.org/pdfua/ns/id/"
 XMP_NS_PDFX_ID = "http://www.npes.org/pdfx/ns/id/"
 XMP_NS_PHOTOSHOP = "http://ns.adobe.com/photoshop/1.0/"
+XMP_NS_PRISM = "http://prismstandard.org/namespaces/basic/1.0/"
 XMP_NS_PRISM2 = "http://prismstandard.org/namespaces/basic/2.0/"
 XMP_NS_PRISM3 = "http://prismstandard.org/namespaces/basic/3.0/"
 XMP_NS_RDF = "http://www.w3.org/1999/02/22-rdf-syntax-ns#"
@@ -53,19 +48,28 @@ XMP_NS_XMP = "http://ns.adobe.com/xap/1.0/"
 XMP_NS_XMP_MM = "http://ns.adobe.com/xap/1.0/mm/"
 XMP_NS_XMP_RIGHTS = "http://ns.adobe.com/xap/1.0/rights/"
 
-DEFAULT_NAMESPACES = [
+DEFAULT_NAMESPACES: list[tuple[str, str]] = [
     ('adobe:ns:meta/', 'x'),
     (XMP_NS_DC, 'dc'),
     (XMP_NS_PDF, 'pdf'),
     (XMP_NS_PDFA_ID, 'pdfaid'),
+    (XMP_NS_PDFA_EXTENSION, 'pdfaExtension'),
+    (XMP_NS_PDFA_PROPERTY, 'pdfaProperty'),
+    (XMP_NS_PDFA_SCHEMA, 'pdfaSchema'),
+    (XMP_NS_PDFUA_ID, 'pdfuaid'),
     (XMP_NS_PDFX_ID, 'pdfxid'),
     (XMP_NS_PHOTOSHOP, 'photoshop'),
+    (XMP_NS_PRISM, 'prism'),
     (XMP_NS_PRISM2, 'prism2'),
     (XMP_NS_PRISM3, 'prism3'),
     (XMP_NS_RDF, 'rdf'),
     (XMP_NS_XMP, 'xmp'),
     (XMP_NS_XMP_MM, 'xmpMM'),
     (XMP_NS_XMP_RIGHTS, 'xmpRights'),
+    ('http://crossref.org/crossmark/1.0/', 'crossmark'),
+    ('http://www.niso.org/schemas/jav/1.0/', 'jav'),
+    ('http://ns.adobe.com/pdfx/1.3/', 'pdfx'),
+    ('http://www.niso.org/schemas/ali/1.0/', 'ali'),
 ]
 
 for _uri, _prefix in DEFAULT_NAMESPACES:
@@ -86,9 +90,11 @@ XPACKET_END = b"""\n<?xpacket end="w"?>\n"""
 
 
 class XmpContainer(NamedTuple):
+    """Map XMP container object to suitable Python container."""
+
     rdf_type: str
-    py_type: Type
-    insert_fn: Callable
+    py_type: type
+    insert_fn: Callable[..., None]
 
 
 log = logging.getLogger(__name__)
@@ -97,11 +103,9 @@ log = logging.getLogger(__name__)
 class NeverRaise(Exception):
     """An exception that is never raised."""
 
-    pass  # pylint: disable=unnecessary-pass
-
 
 class AltList(list):
-    pass
+    """XMP AltList container."""
 
 
 XMP_CONTAINERS = [
@@ -147,7 +151,7 @@ def _parser_replace_with_empty_xmp(_xml: bytes = b''):
     return _parser_basic(XMP_EMPTY)
 
 
-def _clean(s: Union[str, Iterable[str]], joiner: str = '; ') -> str:
+def _clean(s: str | Iterable[str], joiner: str = '; ') -> str:
     """Ensure an object can safely be inserted in a XML tag body.
 
     If we still have a non-str object at this point, the best option is to
@@ -167,7 +171,7 @@ def _clean(s: Union[str, Iterable[str]], joiner: str = '; ') -> str:
 
 
 def encode_pdf_date(d: datetime) -> str:
-    """Encode Python datetime object as PDF date string
+    """Encode Python datetime object as PDF date string.
 
     From Adobe pdfmark manual:
     (D:YYYYMMDDHHmmSSOHH'mm')
@@ -186,7 +190,6 @@ def encode_pdf_date(d: datetime) -> str:
 
     'D:' is required in PDF/A, so we always add it.
     """
-
     # The formatting of %Y is not consistent as described in
     # https://bugs.python.org/issue13305 and underspecification in libc.
     # So explicitly format the year with leading zeros
@@ -200,7 +203,7 @@ def encode_pdf_date(d: datetime) -> str:
 
 
 def decode_pdf_date(s: str) -> datetime:
-    """Decode a pdfmark date to a Python datetime object
+    """Decode a pdfmark date to a Python datetime object.
 
     A pdfmark date is a string in a paritcular format. See the pdfmark
     Reference for the specification.
@@ -224,59 +227,79 @@ def decode_pdf_date(s: str) -> datetime:
 
 
 class Converter(ABC):
-    @staticmethod
-    @abstractmethod
-    def xmp_from_docinfo(docinfo_val: Optional[str]) -> Any:  # type: ignore
-        "Derive XMP metadata from a DocumentInfo string"
+    """XMP <-> DocumentInfo converter."""
 
     @staticmethod
     @abstractmethod
-    def docinfo_from_xmp(xmp_val: Any) -> Optional[str]:
-        "Derive a DocumentInfo value from equivalent XMP metadata"
+    def xmp_from_docinfo(docinfo_val: str | None) -> Any:  # type: ignore
+        """Derive XMP metadata from a DocumentInfo string."""
+
+    @staticmethod
+    @abstractmethod
+    def docinfo_from_xmp(xmp_val: Any) -> str | None:
+        """Derive a DocumentInfo value from equivalent XMP metadata."""
 
 
 class AuthorConverter(Converter):
+    """Convert XMP document authors to DocumentInfo."""
+
     @staticmethod
-    def xmp_from_docinfo(docinfo_val: Optional[str]) -> Any:  # type: ignore
+    def xmp_from_docinfo(docinfo_val: str | None) -> Any:  # type: ignore
+        """Derive XMP authors info from DocumentInfo."""
         return [docinfo_val]
 
     @staticmethod
     def docinfo_from_xmp(xmp_val):
+        """Derive DocumentInfo authors from XMP.
+
+        XMP supports multiple author values, while DocumentInfo has a string,
+        so we return the values separated by semi-colons.
+        """
         if isinstance(xmp_val, str):
             return xmp_val
-        elif xmp_val is None or xmp_val == [None]:
+        if xmp_val is None or xmp_val == [None]:
             return None
-        else:
-            return '; '.join(xmp_val)
+        return '; '.join(xmp_val)
 
 
 class DateConverter(Converter):
+    """Convert XMP dates to DocumentInfo."""
+
     @staticmethod
     def xmp_from_docinfo(docinfo_val):
+        """Derive XMP date from DocumentInfo."""
         if docinfo_val == '':
             return ''
         return decode_pdf_date(docinfo_val).isoformat()
 
     @staticmethod
     def docinfo_from_xmp(xmp_val):
+        """Derive DocumentInfo from XMP."""
         if xmp_val.endswith('Z'):
             xmp_val = xmp_val[:-1] + '+00:00'
         try:
             dateobj = datetime.fromisoformat(xmp_val)
         except IndexError:
-            # PyPy 3.7 may raise IndexError - convert to ValueError
+            # PyPy 3.8 may raise IndexError - convert to ValueError
             raise ValueError(f"Invalid isoformat string: '{xmp_val}'") from None
         return encode_pdf_date(dateobj)
 
 
 class DocinfoMapping(NamedTuple):
+    """Map DocumentInfo keys to their XMP equivalents, along with converter."""
+
     ns: str
     key: str
     name: Name
-    converter: Optional[Type[Converter]]
+    converter: type[Converter] | None
 
 
 def ensure_loaded(fn):
+    """Ensure the XMP has been loaded and parsed.
+
+    TODO: Can this be removed? Why allow the uninit'ed state to even exist?
+    """
+
     @wraps(fn)
     def wrapper(self, *args, **kwargs):
         if not self._xmp:
@@ -287,7 +310,7 @@ def ensure_loaded(fn):
 
 
 class PdfMetadata(MutableMapping):
-    """Read and edit the metadata associated with a PDF
+    """Read and edit the metadata associated with a PDF.
 
     The PDF specification contain two types of metadata, the newer XMP
     (Extensible Metadata Platform, XML-based) and older DocumentInformation
@@ -309,7 +332,6 @@ class PdfMetadata(MutableMapping):
     To update metadata, use a with block.
 
     Example:
-
         >>> with pdf.open_metadata() as records:
                 records['dc:title'] = 'New Title'
 
@@ -317,7 +339,7 @@ class PdfMetadata(MutableMapping):
         :meth:`pikepdf.Pdf.open_metadata`
     """
 
-    DOCINFO_MAPPING: List[DocinfoMapping] = [
+    DOCINFO_MAPPING: list[DocinfoMapping] = [
         DocinfoMapping(XMP_NS_DC, 'creator', Name.Author, AuthorConverter),
         DocinfoMapping(XMP_NS_DC, 'description', Name.Subject, None),
         DocinfoMapping(XMP_NS_DC, 'title', Name.Title, None),
@@ -328,8 +350,8 @@ class PdfMetadata(MutableMapping):
         DocinfoMapping(XMP_NS_XMP, 'ModifyDate', Name.ModDate, DateConverter),
     ]
 
-    NS: Dict[str, str] = {prefix: uri for uri, prefix in DEFAULT_NAMESPACES}
-    REVERSE_NS: Dict[str, str] = {uri: prefix for uri, prefix in DEFAULT_NAMESPACES}
+    NS: dict[str, str] = {prefix: uri for uri, prefix in DEFAULT_NAMESPACES}
+    REVERSE_NS: dict[str, str] = dict(DEFAULT_NAMESPACES)
 
     _PARSERS_OVERWRITE_INVALID_XML: Iterable[Callable[[bytes], Any]] = [
         _parser_basic,
@@ -339,13 +361,26 @@ class PdfMetadata(MutableMapping):
     ]
     _PARSERS_STANDARD: Iterable[Callable[[bytes], Any]] = [_parser_basic]
 
+    @classmethod
+    def register_xml_namespace(cls, uri, prefix):
+        """Register a new XML/XMP namespace.
+
+        Arguments:
+            uri: The long form of the namespace.
+            prefix: The alias to use when interpreting XMP.
+        """
+        cls.NS[prefix] = uri
+        cls.REVERSE_NS[uri] = prefix
+        etree.register_namespace(_prefix, _uri)
+
     def __init__(
         self,
-        pdf: 'Pdf',
+        pdf: Pdf,
         pikepdf_mark: bool = True,
         sync_docinfo: bool = True,
         overwrite_invalid_xml: bool = True,
     ):
+        """Construct PdfMetadata. Use Pdf.open_metadata() instead."""
         self._pdf = pdf
         self._xmp = None
         self.mark = pikepdf_mark
@@ -356,7 +391,7 @@ class PdfMetadata(MutableMapping):
     def load_from_docinfo(
         self, docinfo, delete_missing: bool = False, raise_failure: bool = False
     ) -> None:
-        """Populate the XMP metadata object with DocumentInfo
+        """Populate the XMP metadata object with DocumentInfo.
 
         Arguments:
             docinfo: a DocumentInfo, e.g pdf.docinfo
@@ -373,8 +408,7 @@ class PdfMetadata(MutableMapping):
         def warn_or_raise(msg, e=None):
             if raise_failure:
                 raise ValueError(msg) from e
-            else:
-                warn(msg)
+            warn(msg)
 
         for uri, shortkey, docinfo_name, converter in self.DOCINFO_MAPPING:
             qname = QName(uri, shortkey)
@@ -445,20 +479,25 @@ class PdfMetadata(MutableMapping):
                 for pi in pis:
                     etree.strip_tags(self._xmp, pi.tag)
                 self._get_rdf_root()
-            except (Exception if self.overwrite_invalid_xml else NeverRaise) as e:
+            except (
+                Exception  # pylint: disable=broad-except
+                if self.overwrite_invalid_xml
+                else NeverRaise
+            ) as e:
                 log.warning("Error occurred parsing XMP", exc_info=e)
                 self._xmp = _parser_replace_with_empty_xmp()
         else:
             log.warning("Error occurred parsing XMP")
             self._xmp = _parser_replace_with_empty_xmp()
-        return
 
     @ensure_loaded
     def __enter__(self):
+        """Open metadata for editing."""
         self._updating = True
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
+        """Close metadata and apply changes."""
         try:
             if exc_type is not None:
                 return
@@ -467,7 +506,7 @@ class PdfMetadata(MutableMapping):
             self._updating = False
 
     def _update_docinfo(self):
-        """Update the PDF's DocumentInfo dictionary to match XMP metadata
+        """Update the PDF's DocumentInfo dictionary to match XMP metadata.
 
         The standard mapping is described here:
             https://www.pdfa.org/pdfa-metadata-xmp-rdf-dublin-core/
@@ -520,7 +559,7 @@ class PdfMetadata(MutableMapping):
         return xml_bytes
 
     def _apply_changes(self):
-        """Serialize our changes back to the PDF in memory
+        """Serialize our changes back to the PDF in memory.
 
         Depending how we are initialized, leave our metadata mark and producer.
         """
@@ -544,8 +583,8 @@ class PdfMetadata(MutableMapping):
             self._update_docinfo()
 
     @classmethod
-    def _qname(cls, name: Union[QName, str]) -> str:
-        """Convert name to an XML QName
+    def _qname(cls, name: QName | str) -> str:
+        """Convert name to an XML QName.
 
         e.g. pdf:Producer -> {http://ns.adobe.com/pdf/1.3/}Producer
         """
@@ -557,12 +596,19 @@ class PdfMetadata(MutableMapping):
             return name
         if name.startswith('{'):
             return name
-        prefix, tag = name.split(':', maxsplit=1)
+        try:
+            prefix, tag = name.split(':', maxsplit=1)
+        except ValueError:
+            # If missing the namespace, put it in the top level namespace
+            # To do this completely correct we actually need to figure out
+            # the namespace based on context defined by parent tags. That
+            #   https://www.w3.org/2001/tag/doc/qnameids.html
+            prefix, tag = 'x', name
         uri = cls.NS[prefix]
         return str(QName(uri, tag))
 
     def _prefix_from_uri(self, uriname):
-        """Given a fully qualified XML name, find a prefix
+        """Given a fully qualified XML name, find a prefix.
 
         e.g. {http://ns.adobe.com/pdf/1.3/}Producer -> pdf:Producer
         """
@@ -571,7 +617,7 @@ class PdfMetadata(MutableMapping):
         return self.REVERSE_NS[uri] + ':' + tag
 
     def _get_subelements(self, node):
-        """Gather the sub-elements attached to a node
+        """Gather the sub-elements attached to a node.
 
         Gather rdf:Bag and and rdf:Seq into set and list respectively. For
         alternate languages values, take the first language only for
@@ -602,8 +648,8 @@ class PdfMetadata(MutableMapping):
                 raise ValueError("Metadata seems to be XML but not XMP")
         return rdf
 
-    def _get_elements(self, name: Union[str, QName] = ''):
-        """Get elements from XMP
+    def _get_elements(self, name: str | QName = ''):
+        """Get elements from XMP.
 
         Core routine to find elements matching name within the XMP and yield
         them.
@@ -646,11 +692,13 @@ class PdfMetadata(MutableMapping):
         yield from (v[2] for v in self._get_elements(name))
 
     @ensure_loaded
-    def __contains__(self, key: Union[str, QName]):
+    def __contains__(self, key: str | QName):
+        """Test if XMP key is in metadata."""
         return any(self._get_element_values(key))
 
     @ensure_loaded
-    def __getitem__(self, key: Union[str, QName]):
+    def __getitem__(self, key: str | QName):
+        """Retrieve XMP metadata for key."""
         try:
             return next(self._get_element_values(key))
         except StopIteration:
@@ -658,6 +706,7 @@ class PdfMetadata(MutableMapping):
 
     @ensure_loaded
     def __iter__(self):
+        """Iterate through XMP metadata attributes and nodes."""
         for node, attrib, _val, _parents in self._get_elements():
             if attrib:
                 yield attrib
@@ -666,12 +715,13 @@ class PdfMetadata(MutableMapping):
 
     @ensure_loaded
     def __len__(self):
+        """Return number of items in metadata."""
         return len(list(iter(self)))
 
     def _setitem(
         self,
-        key: Union[str, QName],
-        val: Union[Set[str], List[str], str],
+        key: str | QName,
+        val: set[str] | list[str] | str,
         applying_mark: bool = False,
     ):
         if not self._updating:
@@ -712,7 +762,7 @@ class PdfMetadata(MutableMapping):
             c.rdf_type for c in XMP_CONTAINERS if isinstance(items, c.py_type)
         )
         seq = etree.SubElement(node, str(QName(XMP_NS_RDF, rdf_type)))
-        tag_attrib: Optional[Dict[str, str]] = None
+        tag_attrib: dict[str, str] | None = None
         if rdf_type == 'Alt':
             tag_attrib = {str(QName(XMP_NS_XML, 'lang')): 'x-default'}
         for item in items:
@@ -760,7 +810,7 @@ class PdfMetadata(MutableMapping):
             node = etree.SubElement(rdfdesc, self._qname(key))
             self._setitem_add_array(node, val)
         elif isinstance(val, str):
-            _rdfdesc = etree.SubElement(  # lgtm [py/unused-local-variable]
+            _rdfdesc = etree.SubElement(
                 rdf,
                 str(QName(XMP_NS_RDF, 'Description')),
                 attrib={
@@ -772,11 +822,13 @@ class PdfMetadata(MutableMapping):
             raise TypeError(f"Setting {key} to {val} with type {type(val)}") from None
 
     @ensure_loaded
-    def __setitem__(self, key: Union[str, QName], val: Union[Set[str], List[str], str]):
+    def __setitem__(self, key: str | QName, val: set[str] | list[str] | str):
+        """Set XMP metadata key to value."""
         return self._setitem(key, val, False)
 
     @ensure_loaded
-    def __delitem__(self, key: Union[str, QName]):
+    def __delitem__(self, key: str | QName):
+        """Delete item from XMP metadata."""
         if not self._updating:
             raise RuntimeError("Metadata not opened for editing, use with block")
         try:
@@ -797,7 +849,7 @@ class PdfMetadata(MutableMapping):
 
     @property
     def pdfa_status(self) -> str:
-        """Returns the PDF/A conformance level claimed by this PDF, or False
+        """Return the PDF/A conformance level claimed by this PDF, or False.
 
         A PDF may claim to PDF/A compliant without this being true. Use an
         independent verifier such as veraPDF to test if a PDF is truly
@@ -821,7 +873,7 @@ class PdfMetadata(MutableMapping):
 
     @property
     def pdfx_status(self) -> str:
-        """Returns the PDF/X conformance level claimed by this PDF, or False
+        """Return the PDF/X conformance level claimed by this PDF, or False.
 
         A PDF may claim to PDF/X compliant without this being true. Use an
         independent verifier such as veraPDF to test if a PDF is truly
@@ -843,4 +895,5 @@ class PdfMetadata(MutableMapping):
 
     @ensure_loaded
     def __str__(self):
+        """Convert XMP metadata to XML string."""
         return self._get_xml_bytes(xpacket=False).decode('utf-8')

@@ -1,17 +1,18 @@
-# This Source Code Form is subject to the terms of the Mozilla Public
-# License, v. 2.0. If a copy of the MPL was not distributed with this
-# file, You can obtain one at http://mozilla.org/MPL/2.0/.
-#
-# Copyright (C) 2017, James R. Barlow (https://github.com/jbarlow83/)
+# SPDX-FileCopyrightText: 2022 James R. Barlow
+# SPDX-License-Identifier: MPL-2.0
 
-from typing import Any, Dict, NamedTuple, cast
+"""For managing PDF encryption."""
 
-from pikepdf._qpdf import EncryptionMethod
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any, Literal, NamedTuple, cast
+
+if TYPE_CHECKING:
+    from pikepdf._core import EncryptionMethod
 
 
 class Permissions(NamedTuple):
-    """
-    Stores the user-level permissions for an encrypted PDF.
+    """Stores the user-level permissions for an encrypted PDF.
 
     A compliant PDF reader/writer should enforce these restrictions on people
     who have the user password and not the owner password. In practice, either
@@ -37,7 +38,7 @@ class Permissions(NamedTuple):
     """Can users arrange document contents?"""
 
     modify_form: bool = True
-    """Can users fill out formts?"""
+    """Can users fill out forms?"""
 
     modify_other: bool = True
     """Can users modify the document?"""
@@ -53,15 +54,21 @@ DEFAULT_PERMISSIONS = Permissions()
 
 
 class EncryptionInfo:
-    """
-    Reports encryption information for an encrypted PDF.
+    """Reports encryption information for an encrypted PDF.
 
     This information may not be changed, except when a PDF is saved.
     This object is not used to specify the encryption settings to save
     a PDF, due to non-overlapping information requirements.
     """
 
-    def __init__(self, encdict: Dict[str, Any]):
+    def __init__(self, encdict: dict[str, Any]):
+        """Initialize EncryptionInfo.
+
+        Generally pikepdf will initialize and return it.
+
+        Args:
+            encdict: Python dictionary containing encryption settings.
+        """
         self._encdict = encdict
 
     @property
@@ -76,7 +83,7 @@ class EncryptionInfo:
 
     @property
     def P(self) -> int:
-        """Encoded permission bits.
+        """Return encoded permission bits.
 
         See :meth:`Pdf.allow` instead.
         """
@@ -85,17 +92,17 @@ class EncryptionInfo:
     @property
     def stream_method(self) -> EncryptionMethod:
         """Encryption method used to encode streams."""
-        return cast(EncryptionMethod, self._encdict['stream'])
+        return cast('EncryptionMethod', self._encdict['stream'])
 
     @property
     def string_method(self) -> EncryptionMethod:
         """Encryption method used to encode strings."""
-        return cast(EncryptionMethod, self._encdict['string'])
+        return cast('EncryptionMethod', self._encdict['string'])
 
     @property
     def file_method(self) -> EncryptionMethod:
         """Encryption method used to encode the whole file."""
-        return cast(EncryptionMethod, self._encdict['file'])
+        return cast('EncryptionMethod', self._encdict['file'])
 
     @property
     def user_password(self) -> bytes:
@@ -112,56 +119,49 @@ class EncryptionInfo:
 
     @property
     def encryption_key(self) -> bytes:
-        """The RC4 or AES encryption key used for this file."""
+        """Return the RC4 or AES encryption key used for this file."""
         return bytes(self._encdict['encryption_key'])
 
     @property
     def bits(self) -> int:
-        """The number of encryption bits.
+        """Return the number of bits in the encryption algorithm.
 
         e.g. if the algorithm is AES-256, this returns 256.
         """
         return len(self._encdict['encryption_key']) * 8
 
 
-class Encryption(dict):
-    """
-    Specify the encryption settings to apply when a PDF is saved.
+class Encryption(NamedTuple):
+    """Specify the encryption settings to apply when a PDF is saved."""
 
-    Args:
-        owner: The owner password to use. This allows full control
-            of the file. If blank, the PDF will be encrypted and
-            present as "(SECURED)" in PDF viewers. If the owner password
-            is blank, the user password should be as well.
-        user: The user password to use. With this password, some
-            restrictions will be imposed by a typical PDF reader.
-            If blank, the PDF can be opened by anyone, but only modified
-            as allowed by the permissions in ``allow``.
-        R: Select the security handler algorithm to use. Choose from:
-            ``2``, ``3``, ``4`` or ``6``. By default, the highest version of
-            is selected (``6``). ``5`` is a deprecated algorithm that should
-            not be used.
-        allow: The permissions to set.
-            If omitted, all permissions are granted to the user.
-        aes: If True, request the AES algorithm. If False, use RC4.
-            If omitted, AES is selected whenever possible (R >= 4).
-        metadata: If True, also encrypt the PDF metadata. If False,
-            metadata is not encrypted. Reading document metadata without
-            decryption may be desirable in some cases. Requires ``aes=True``.
-            If omitted, metadata is encrypted whenever possible.
-    """
+    owner: str = ''
+    """The owner password to use. This allows full control
+    of the file. If blank, the PDF will be encrypted and
+    present as "(SECURED)" in PDF viewers. If the owner password
+    is blank, the user password should be as well."""
 
-    def __init__(
-        self,
-        *,
-        owner: str,
-        user: str,
-        R: int = 6,
-        allow: Permissions = DEFAULT_PERMISSIONS,
-        aes: bool = True,
-        metadata: bool = True,
-    ):
-        super().__init__()
-        self.update(
-            dict(R=R, owner=owner, user=user, allow=allow, aes=aes, metadata=metadata)
-        )
+    user: str = ''
+    """The user password to use. With this password, some
+    restrictions will be imposed by a typical PDF reader.
+    If blank, the PDF can be opened by anyone, but only modified
+    as allowed by the permissions in ``allow``."""
+
+    R: Literal[2, 3, 4, 5, 6] = 6
+    """Select the security handler algorithm to use. Choose from:
+    ``2``, ``3``, ``4`` or ``6``. By default, the highest version of
+    is selected (``6``). ``5`` is a deprecated algorithm that should
+    not be used."""
+
+    allow: Permissions = DEFAULT_PERMISSIONS
+    """The permissions to set.
+    If omitted, all permissions are granted to the user."""
+
+    aes: bool = True
+    """If True, request the AES algorithm. If False, use RC4.
+    If omitted, AES is selected whenever possible (R >= 4)."""
+
+    metadata: bool = True
+    """If True, also encrypt the PDF metadata. If False,
+    metadata is not encrypted. Reading document metadata without
+    decryption may be desirable in some cases. Requires ``aes=True``.
+    If omitted, metadata is encrypted whenever possible."""

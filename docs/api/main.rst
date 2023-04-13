@@ -15,7 +15,7 @@ Main objects
 .. class:: pikepdf.ObjectStreamMode
 
     Options for saving streams within PDFs, which are more a compact
-    way of saving certains types of data that was added in PDF 1.5. All
+    way of saving certain types of data that was added in PDF 1.5. All
     modern PDF viewers support object streams, but some third party tools
     and libraries cannot read them.
 
@@ -131,13 +131,13 @@ Internal objects
 These objects are returned by other pikepdf objects. They are part of the API,
 but not intended to be created explicitly.
 
-.. autoclass:: pikepdf._qpdf.PageList
+.. autoclass:: pikepdf._core.PageList
     :members:
 
     A ``list``-like object enumerating a range of pages in a :class:`pikepdf.Pdf`.
     It may be all of the pages or a subset.
 
-.. autoclass:: pikepdf._qpdf._ObjectList
+.. autoclass:: pikepdf._core._ObjectList
     :members:
 
     A ``list``-like object containing multiple ``pikepdf.Object``.
@@ -213,3 +213,10 @@ but not intended to be created explicitly.
         dictionary to interpret the image correctly. pikepdf automatically
         packages inline images into a more useful class, so this will not
         generally appear.
+
+Jobs
+====
+
+.. autoclass:: pikepdf.Job
+    :members:
+    :special-members: __init__

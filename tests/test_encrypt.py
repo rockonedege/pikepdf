@@ -1,3 +1,8 @@
+# SPDX-FileCopyrightText: 2022 James R. Barlow
+# SPDX-License-Identifier: CC0-1.0
+
+from __future__ import annotations
+
 import pytest
 
 import pikepdf
@@ -90,9 +95,9 @@ def test_encrypt_info(trivial, outpdf):
         assert pdf.encryption.R == 4
         assert pdf.encryption.V == 4
         assert pdf.encryption.P == -3392
-        assert pdf.encryption.stream_method == pikepdf._qpdf.EncryptionMethod.aes
-        assert pdf.encryption.string_method == pikepdf._qpdf.EncryptionMethod.aes
-        assert pdf.encryption.file_method == pikepdf._qpdf.EncryptionMethod.aes
+        assert pdf.encryption.stream_method == pikepdf._core.EncryptionMethod.aes
+        assert pdf.encryption.string_method == pikepdf._core.EncryptionMethod.aes
+        assert pdf.encryption.file_method == pikepdf._core.EncryptionMethod.aes
         assert pdf.encryption.encryption_key[:2] == b'\x02\xdc'
 
 
@@ -107,6 +112,8 @@ def test_encrypt_info(trivial, outpdf):
         (4, "met", "met", False, True, r"unless AES"),
         (3, "密码", "password", False, False, r"password.*not encodable"),
         (4, "owner", "密码", False, False, r"password.*not encodable"),
+        (6, None, "a", True, True, r"may not be None"),
+        (6, "a", None, True, True, r"may not be None"),
     ],
 )
 def test_bad_settings(trivial, outpdf, R, owner, user, aes, metadata, err):

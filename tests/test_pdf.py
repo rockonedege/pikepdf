@@ -1,22 +1,26 @@
-"""
-Testing focused on pikepdf.Pdf
-"""
+# SPDX-FileCopyrightText: 2022 James R. Barlow
+# SPDX-License-Identifier: CC0-1.0
+
+"""Testing focused on pikepdf.Pdf."""
+
+from __future__ import annotations
 
 import locale
-import os
 import shutil
-import sys
 import zlib
 from contextlib import nullcontext
 from io import BytesIO, StringIO
 from os import fspath
 from pathlib import Path
+from subprocess import CalledProcessError
 from unittest.mock import Mock
 
 import pytest
+from conftest import fails_if_pypy
 
 import pikepdf
 from pikepdf import Name, PasswordError, Pdf, PdfError, Stream
+from pikepdf._exceptions import DependencyError
 
 # pylint: disable=redefined-outer-name
 
@@ -155,10 +159,10 @@ class TestStreams:
 
     def test_save_stream(self, trivial, outdir):
         pdf = trivial
-        pdf.save(outdir / 'nostream.pdf', static_id=True)
+        pdf.save(outdir / 'nostream.pdf', deterministic_id=True)
 
         bio = BytesIO()
-        pdf.save(bio, static_id=True)
+        pdf.save(bio, deterministic_id=True)
         bio.seek(0)
 
         with (outdir / 'nostream.pdf').open('rb') as saved_file:
@@ -335,6 +339,23 @@ def test_check(resources):
         assert 'parse error while reading' in problems[0]
 
 
+@fails_if_pypy
+def test_check_specialized_decoder_fallback(resources, monkeypatch):
+    class MissingJBIG2Decoder(pikepdf.jbig2.JBIG2DecoderInterface):
+        def check_available(self):
+            raise DependencyError('jbig2dec')
+
+        def decode_jbig2(self, jbig2: bytes, jbig2_globals: bytes) -> bytes:
+            raise CalledProcessError(1, 'jbig2dec')
+
+    monkeypatch.setattr(pikepdf.jbig2, 'get_decoder', MissingJBIG2Decoder)
+
+    with pikepdf.open(resources / 'jbig2.pdf') as pdf:
+        with pytest.warns(UserWarning, match=r".*missing some specialized.*"):
+            problems = pdf.check()
+        assert len(problems) == 0
+
+
 def test_repr(trivial):
     assert repr(trivial).startswith('<')
 
@@ -361,25 +382,25 @@ def test_invalid_flate_compression_level():
     # and will change subsequent test results, so just ping it with an invalid
     # value to get partial code coverage.
     with pytest.raises(ValueError):
-        pikepdf._qpdf.set_flate_compression_level(99)
+        pikepdf.settings.set_flate_compression_level(99)
 
 
 def test_flate_compression_level():
     # While this function affects global state, we can test it safely because
     # setting the value to -1 restores the default.
     try:
-        pikepdf._qpdf.set_flate_compression_level(0)
-        pikepdf._qpdf.set_flate_compression_level(9)
+        pikepdf.settings.set_flate_compression_level(0)
+        pikepdf.settings.set_flate_compression_level(9)
     finally:
-        pikepdf._qpdf.set_flate_compression_level(-1)
+        pikepdf.settings.set_flate_compression_level(-1)
 
 
 def test_set_access_default_mmap():
-    initial = pikepdf._qpdf.get_access_default_mmap()
+    initial = pikepdf._core.get_access_default_mmap()
     try:
-        pikepdf._qpdf.set_access_default_mmap(True)
+        pikepdf._core.set_access_default_mmap(True)
     finally:
-        pikepdf._qpdf.set_access_default_mmap(initial)
+        pikepdf._core.set_access_default_mmap(initial)
 
 
 def test_generate_appearance_streams(pdf_form):
@@ -396,7 +417,6 @@ def test_generate_appearance_streams(pdf_form):
     [('all', None), ('print', None), ('screen', None), ('', None), ('42', ValueError)],
 )
 def test_flatten_annotations_parameters(pdf_form, mode, exc):
-
     if exc is not None:
         error_ctx = pytest.raises(exc)
     else:
@@ -406,3 +426,9 @@ def test_flatten_annotations_parameters(pdf_form, mode, exc):
             pdf_form.flatten_annotations()
         else:
             pdf_form.flatten_annotations(mode)
+
+
+def test_refcount_chaining(resources):
+    # Ensure we can chain without crashing when Pdf is not properly opened or
+    # assigned a name
+    Pdf.open(resources / 'pal-1bit-trivial.pdf').pages[0]

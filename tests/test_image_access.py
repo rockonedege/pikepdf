@@ -1,4 +1,8 @@
-import platform
+# SPDX-FileCopyrightText: 2022 James R. Barlow
+# SPDX-License-Identifier: CC0-1.0
+
+from __future__ import annotations
+
 import subprocess
 import zlib
 from contextlib import contextmanager
@@ -14,6 +18,7 @@ import pytest
 from conftest import needs_python_v
 from hypothesis import assume, given, note, settings
 from hypothesis import strategies as st
+from packaging.version import Version
 from PIL import Image, ImageChops, ImageCms
 from PIL import features as PIL_features
 
@@ -208,7 +213,6 @@ def test_inline(inline):
     assert iimage.width == 8
     assert not iimage.image_mask
     assert iimage.mode == 'RGB'
-    assert iimage.is_inline
     assert iimage.colorspace == '/DeviceRGB'
     assert 'PdfInlineImage' in repr(iimage)
 
@@ -231,6 +235,11 @@ def test_inline_extract(inline):
     bio.seek(0)
     im = Image.open(bio)
     assert im.size == (8, 8) and im.mode == iimage.mode
+
+
+def test_inline_read(inline):
+    iimage, _pdf = inline
+    assert iimage.read_bytes()[0:6] == b'\xff\xff\xff\x00\x00\x00'
 
 
 def test_inline_to_pil(inline):
@@ -510,7 +519,6 @@ def test_image_palette(resources, filename, bpc, rgb):
 
     assert pim.palette[0] == 'RGB'
     assert pim.colorspace == '/DeviceRGB'
-    assert not pim.is_inline
     assert pim.mode == 'P'
     assert pim.bits_per_component == bpc
 
@@ -537,7 +545,8 @@ def first_image_from_pdfimages(pdf, tmpdir):
 
     outpng = tmpdir / 'pdfimage-000.png'
     assert outpng.exists()
-    yield Image.open(outpng)
+    with Image.open(outpng) as im:
+        yield im
 
 
 @given(spec=valid_random_palette_image_spec())
@@ -577,13 +586,12 @@ def test_bool_in_inline_image():
     not PIL_features.check_codec('jpg_2000'), reason='no JPEG2000 codec'
 )
 def test_jp2(first_image_in):
-    xobj, pdf = first_image_in('pike-jp2.pdf')
+    xobj, _pdf = first_image_in('pike-jp2.pdf')
     pim = PdfImage(xobj)
     assert isinstance(pim, PdfJpxImage)
 
     assert '/JPXDecode' in pim.filters
     assert pim.colorspace == '/DeviceRGB'
-    assert not pim.is_inline
     assert not pim.indexed
     assert pim.mode == 'RGB'
     assert pim.bits_per_component == 8
@@ -687,6 +695,16 @@ def test_ccitt_photometry(sandwich):
     im = im.convert('L')
     assert im.getpixel((0, 0)) == 255, "Expected white background"
 
+    xobj.DecodeParms.BlackIs1 = True
+    im = pim.as_pil_image()
+    im = im.convert('L')
+    assert im.getpixel((0, 0)) == 255, "Expected white background"
+
+    xobj.DecodeParms.BlackIs1 = False
+    im = pim.as_pil_image()
+    im = im.convert('L')
+    assert im.getpixel((0, 0)) == 255, "Expected white background"
+
 
 def test_ccitt_encodedbytealign(sandwich):
     xobj, _pdf = sandwich
@@ -720,26 +738,30 @@ def test_jbig2_not_available(jbig2, monkeypatch):
     xobj, _pdf = jbig2
     pim = PdfImage(xobj)
 
-    def raise_filenotfound(*args, **kwargs):
-        raise FileNotFoundError('jbig2dec')
+    class NotFoundJBIG2Decoder(pikepdf.jbig2.JBIG2DecoderInterface):
+        def check_available(self):
+            raise DependencyError('jbig2dec') from FileNotFoundError('jbig2dec')
 
-    monkeypatch.setattr(pikepdf.jbig2, 'run', raise_filenotfound)
+        def decode_jbig2(self, jbig2: bytes, jbig2_globals: bytes) -> bytes:
+            raise FileNotFoundError('jbig2dec')
 
-    assert not pikepdf.jbig2.jbig2dec_available()
+    monkeypatch.setattr(pikepdf.jbig2, 'get_decoder', NotFoundJBIG2Decoder)
+
+    assert not pikepdf.jbig2.get_decoder().available()
 
     with pytest.raises(DependencyError):
         pim.as_pil_image()
 
 
 needs_jbig2dec = pytest.mark.skipif(
-    not pikepdf.jbig2.jbig2dec_available(), reason="jbig2dec not installed"
+    not pikepdf.jbig2.get_decoder().available(), reason="jbig2dec not installed"
 )
 
 
 @needs_jbig2dec
 def test_jbig2_extractor(jbig2):
     xobj, _pdf = jbig2
-    pikepdf.jbig2.extract_jbig2_bytes(xobj.read_raw_bytes(), b'')
+    pikepdf.jbig2.get_decoder().decode_jbig2(xobj.read_raw_bytes(), b'')
 
 
 @needs_jbig2dec
@@ -798,12 +820,15 @@ def test_jbig2_global_palette(first_image_in):
 def test_jbig2_error(first_image_in, monkeypatch):
     xobj, _pdf = first_image_in('jbig2global.pdf')
     pim = PdfImage(xobj)
-    monkeypatch.setattr(pikepdf.jbig2, 'jbig2dec_available', lambda: True)
 
-    def raise_calledprocesserror(*args, **kwargs):
-        raise subprocess.CalledProcessError(1, 'jbig2dec')
+    class BrokenJBIG2Decoder(pikepdf.jbig2.JBIG2DecoderInterface):
+        def check_available(self):
+            return
 
-    monkeypatch.setattr(pikepdf.jbig2, 'run', raise_calledprocesserror)
+        def decode_jbig2(self, jbig2: bytes, jbig2_globals: bytes) -> bytes:
+            raise subprocess.CalledProcessError(1, 'jbig2dec')
+
+    monkeypatch.setattr(pikepdf.jbig2, 'get_decoder', BrokenJBIG2Decoder)
 
     pim = PdfImage(xobj)
     with pytest.raises(PdfError, match="unfilterable stream"):
@@ -816,14 +841,11 @@ def test_jbig2_too_old(first_image_in, monkeypatch):
     xobj, _pdf = first_image_in('jbig2global.pdf')
     pim = PdfImage(xobj)
 
-    def run_version_override(subprocargs, *args, **kwargs):
-        if '--version' in subprocargs:
-            return subprocess.CompletedProcess(subprocargs, 0, 'jbig2dec 0.12\n')
-        return subprocess.run(  # pylint: disable=subprocess-run-check
-            subprocargs, *args, **kwargs
-        )
+    class OldJBIG2Decoder(pikepdf.jbig2.JBIG2Decoder):
+        def _version(self):
+            return Version('0.12')
 
-    monkeypatch.setattr(pikepdf.jbig2, 'run', run_version_override)
+    monkeypatch.setattr(pikepdf.jbig2, 'get_decoder', OldJBIG2Decoder)
 
     pim = PdfImage(xobj)
     with pytest.raises(DependencyError, match='too old'):
@@ -871,7 +893,7 @@ def test_invalid_icc(first_image_in):
         assert pim.icc is not None
 
 
-def test_dict_or_array_dict():
+def test_decodeparms_filter_alternates():
     pdf = pikepdf.new()
     imobj = Stream(
         pdf,

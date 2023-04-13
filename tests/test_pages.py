@@ -1,29 +1,15 @@
+# SPDX-FileCopyrightText: 2022 James R. Barlow
+# SPDX-License-Identifier: CC0-1.0
+
+from __future__ import annotations
+
 import gc
 from contextlib import suppress
 from shutil import copy
-from typing import Type, ValuesView
-
-try:
-    from sys import getrefcount as refcount
-except ImportError:
-
-    def refcount(_x):  # type: ignore
-        return 1
-
 
 import pytest
-from conftest import skip_if_pypy
 
-from pikepdf import (
-    Array,
-    Dictionary,
-    Name,
-    Page,
-    Pdf,
-    PdfMatrix,
-    Stream,
-    __libqpdf_version__,
-)
+from pikepdf import Array, Dictionary, Name, Page, Pdf, Stream
 from pikepdf._cpphelpers import label_from_label_dict
 
 # pylint: disable=redefined-outer-name,pointless-statement
@@ -119,8 +105,7 @@ def test_reverse_pages(resources, outdir):
             assert qr.pages[n].Contents.stream_dict.Length == length
 
 
-@skip_if_pypy
-def test_evil_page_deletion(resources, outdir):
+def test_evil_page_deletion(refcount, resources, outdir):
     copy(resources / 'sandwich.pdf', outdir / 'sandwich.pdf')
 
     src = Pdf.open(outdir / 'sandwich.pdf')  # no with clause
@@ -354,7 +339,7 @@ def test_foreign_copied_pages_are_true_copies(graph, outpdf):
         out.pages.append(graph.pages[0])
 
     for n in [0, 2]:
-        out.pages[n].Rotate = 180
+        out.pages[n].rotate(180, relative=True)
 
     out.save(outpdf)
     with Pdf.open(outpdf) as reopened:
@@ -437,26 +422,37 @@ def test_page_index_foreign_page(fourpages, sandwich):
 
 
 @pytest.mark.parametrize(
-    'd, result',
+    'd, result, exc, excmsg',
     [
-        (Dictionary(), ''),
-        (Dictionary(St=1), ''),
-        (Dictionary(S=Name.D, St=1), '1'),
-        (Dictionary(P='foo'), 'foo'),
-        (Dictionary(P='A', St=2), 'A'),
-        (Dictionary(P='A-', S=Name.D, St=2), 'A-2'),
-        (Dictionary(S=Name.R, St=42), 'XLII'),
-        (Dictionary(S=Name.r, St=1729), 'mdccxxix'),
-        (Dictionary(P="Appendix-", S=Name.a, St=261), 'Appendix-ja'),
-        (42, '42'),
-        (Dictionary(S=Name.R, St=-42), ValueError),
-        (Dictionary(S=Name.A, St=-42), ValueError),
+        (Dictionary(), '', None, None),
+        (Dictionary(St=1), '', None, None),
+        (Dictionary(S=Name.D, St=1), '1', None, None),
+        (Dictionary(P='foo'), 'foo', None, None),
+        (Dictionary(P='A', St=2), 'A', None, None),
+        (Dictionary(P='A-', S=Name.D, St=2), 'A-2', None, None),
+        (Dictionary(S=Name.R, St=42), 'XLII', None, None),
+        (Dictionary(S=Name.r, St=1729), 'mdccxxix', None, None),
+        (Dictionary(P="Appendix-", S=Name.a, St=261), 'Appendix-ja', None, None),
+        (42, '42', None, None),
+        (Dictionary(S=Name.R, St=-42), None, ValueError, "Can't represent"),
+        (Dictionary(S=Name.A, St=-42), None, ValueError, "Can't represent"),
+        (
+            Dictionary(S=Name.r, St=Name.Invalid),
+            'i',
+            UserWarning,
+            'invalid non-integer start value',
+        ),
+        (Dictionary(S="invalid", St=42), '', UserWarning, 'invalid page label style'),
     ],
 )
-def test_page_label_dicts(d, result):
-    if isinstance(result, type) and issubclass(result, Exception):
-        with pytest.raises(result):
-            label_from_label_dict(d)
+def test_page_label_dicts(d, result, exc, excmsg):
+    if exc:
+        if issubclass(exc, Warning):
+            with pytest.warns(exc, match=excmsg):
+                assert label_from_label_dict(d) == result
+        elif issubclass(exc, Exception):
+            with pytest.raises(exc, match=excmsg):
+                label_from_label_dict(d)
     else:
         assert label_from_label_dict(d) == result
 

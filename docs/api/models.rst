@@ -13,10 +13,9 @@ Version 3.x automatically applies support models to ``/Page`` objects.
 .. autoclass:: pikepdf.ObjectHelper
     :members:
 
-    Base class for some support models.
-
 .. autoclass:: pikepdf.Page
     :members:
+    :inherited-members:
 
     Support model wrapper around a page dictionary object.
 
@@ -103,7 +102,7 @@ Version 3.x automatically applies support models to ``/Page`` objects.
 
     .. versionadded:: 2.12
 
-.. autoclass:: pikepdf._qpdf.Attachments
+.. autoclass:: pikepdf._core.Attachments
     :members:
 
     This interface provides access to any files that are attached to this PDF,
@@ -118,6 +117,7 @@ Version 3.x automatically applies support models to ``/Page`` objects.
 
 .. autoclass:: pikepdf.AttachedFileSpec
     :members:
+    :inherited-members:
     :special-members: __init__
 
     In a PDF, a file specification provides name and metadata for a target file.
@@ -158,8 +158,9 @@ Version 3.x automatically applies support models to ``/Page`` objects.
 
     .. versionadded:: 3.0
 
-.. autoclass:: pikepdf._qpdf.AttachedFile
+.. autoclass:: pikepdf._core.AttachedFile
     :members:
+    :inherited-members:
 
     An object that contains an actual attached file. These objects do not need
     to be created manually; they are normally part of an AttachedFileSpec.
@@ -174,16 +175,18 @@ Version 3.x automatically applies support models to ``/Page`` objects.
     A name tree is a key-value data structure. The keys are any binary strings
     (that is, Python ``bytes``). If ``str`` selected is provided as a key,
     the UTF-8 encoding of that string is tested. Name trees are (confusingly)
-    not indexed by PDF name objects.
+    not indexed by ``pikepdf.Name`` objects. They behave like
+    ``DictMapping[bytes, pikepdf.Object]``.
 
-    The keys are ordered; pikepdf will ensure that the order is preserved.
+    The keys are sorted; pikepdf will ensure that the order is preserved.
 
     The value may be any PDF object. Typically it will be a dictionary or array.
 
-    If the name tree is invalid in any way, pikepdf will automatically repair it
-    if it is able to. There should not be any reason to access the internal nodes
-    of a name tree; use this interface instead. Likewise, pikepdf will automatically
-    rebalance the tree as appropriate (all thanks to libqpdf).
+    Internally in the PDF, a name tree can be a fairly complex tree data structure
+    implemented with many dictionaries and arrays. pikepdf (using libqpdf)
+    will automatically read, repair and maintain this tree for you. There should not
+    be any reason to access the internal nodes of a number tree; use this
+    interface instead.
 
     NameTrees are used to store certain objects like file attachments in a PDF.
     Where a more specific interface exists, use that instead, and it will
@@ -196,3 +199,47 @@ Version 3.x automatically applies support models to ``/Page`` objects.
     for a list of PDF objects that are stored in name trees.
 
     .. versionadded:: 3.0
+
+.. autoclass:: pikepdf.NumberTree
+    :members:
+
+    An object for managing *number tree* data structures in PDFs.
+
+    A number tree is a key-value data structure, like name trees, except that the
+    key is an integer. It behaves like ``Dict[int, pikepdf.Object]``.
+
+    The keys can be sparse - not all integers positions will be populated. Keys
+    are also always sorted; pikepdf will ensure that the order is preserved.
+
+    The value may be any PDF object. Typically it will be a dictionary or array.
+
+    Internally in the PDF, a number tree can be a fairly complex tree data structure
+    implemented with many dictionaries and arrays. pikepdf (using libqpdf)
+    will automatically read, repair and maintain this tree for you. There should not
+    be any reason to access the internal nodes of a number tree; use this
+    interface instead.
+
+    NumberTrees are not used much in PDF. The main thing they provide is a mapping
+    between 0-based page numbers and user-facing page numbers (which pikepdf
+    also exposes as ``Page.label``). The ``/PageLabels`` number tree is where the
+    page numbering rules are defined.
+
+    Number trees are described in the |pdfrm| section 7.9.7. See section 12.4.2
+    for a description of the page labels number tree. Here is an example of modifying
+    an existing page labels number tree:
+
+    .. code-block:: python
+
+        pagelabels = NumberTree(pdf.Root.PageLabels)
+        # Label pages starting at 0 with lowercase Roman numerals
+        pagelabels[0] = Dictionary(S=Name.r)
+        # Label pages starting at 6 with decimal numbers
+        pagelabels[6] = Dictionary(S=Name.D)
+
+        # Page labels will now be:
+        # i, ii, iii, iv, v, 1, 2, 3, ...
+
+    Do not modify the internal structure of a name tree while you have a
+    ``NumberTree`` referencing it. Access it only through the ``NumberTree`` object.
+
+    .. versionadded:: 5.4

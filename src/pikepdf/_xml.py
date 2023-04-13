@@ -1,11 +1,9 @@
-# This Source Code Form is subject to the terms of the Mozilla Public
-# License, v. 2.0. If a copy of the MPL was not distributed with this
-# file, You can obtain one at http://mozilla.org/MPL/2.0/.
-#
-# Copyright (C) 2021, James R. Barlow (https://github.com/jbarlow83/)
+# SPDX-FileCopyrightText: 2022 James R. Barlow
+# SPDX-License-Identifier: MPL-2.0
 
+from __future__ import annotations
 
-from typing import IO, Any, AnyStr, Union
+from typing import IO, Any, AnyStr
 
 from lxml.etree import XMLParser as _UnsafeXMLParser
 from lxml.etree import _ElementTree
@@ -21,9 +19,8 @@ class _XMLParser(_UnsafeXMLParser):
         super().__init__(*args, **kwargs)
 
 
-def parse_xml(source: Union[AnyStr, IO[Any]], recover: bool = False) -> _ElementTree:
-    """Wrapper around lxml's parse to provide protection against XXE attacks."""
-
+def parse_xml(source: AnyStr | IO[Any], recover: bool = False) -> _ElementTree:
+    """Wrap lxml's parse to provide protection against XXE attacks."""
     parser = _XMLParser(recover=recover, remove_pis=False)
     return _parse(source, parser=parser)
 

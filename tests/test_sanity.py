@@ -1,6 +1,11 @@
+# SPDX-FileCopyrightText: 2022 James R. Barlow
+# SPDX-License-Identifier: CC0-1.0
+
 """
 A bunch of quick tests that confirm nothing is horribly wrong
 """
+
+from __future__ import annotations
 
 import ast
 import gc
@@ -9,7 +14,12 @@ from pathlib import Path
 from shutil import copy
 
 import pytest
-import tomli
+
+try:
+    import tomllib
+except ModuleNotFoundError:
+    import tomli as tomllib  # type: ignore
+
 from packaging.version import Version
 
 import pikepdf
@@ -17,13 +27,12 @@ from pikepdf import Name, Object, Pdf, Stream
 
 
 def test_minimum_qpdf_version():
-    from pikepdf import _qpdf
+    from pikepdf import _core
 
     with open(Path(__file__).parent / '../pyproject.toml', 'rb') as f:
-        pyproject_toml = tomli.load(f)
+        pyproject_toml = tomllib.load(f)
     toml_env = pyproject_toml['tool']['cibuildwheel']['environment']
-
-    assert Version(_qpdf.qpdf_version()) >= Version(toml_env['QPDF_MIN_VERSION'])
+    assert Version(_core.qpdf_version()) >= Version(toml_env['QPDF_MIN_VERSION'])
 
 
 def test_open_pdf(resources):
@@ -105,7 +114,6 @@ def test_create_pdf(outdir):
 
 def test_copy_semantics(resources):
     with Pdf.open(resources / 'graph.pdf') as pdf:
-
         # Ensure that we can name a reference to a child object and view the
         # changes from the parent
         page = pdf.pages[0]
@@ -166,8 +174,3 @@ def test_readme_example(resources, outpdf):
     exec(  # pylint: disable=exec-used
         code, globals(), dict(resources=resources, outpdf=outpdf)
     )
-
-
-def test_system_error():
-    with pytest.raises(FileNotFoundError):
-        pikepdf._qpdf._test_file_not_found()

@@ -1,10 +1,7 @@
-# This Source Code Form is subject to the terms of the Mozilla Public
-# License, v. 2.0. If a copy of the MPL was not distributed with this
-# file, You can obtain one at http://mozilla.org/MPL/2.0/.
-#
-# Copyright (C) 2017, James R. Barlow (https://github.com/jbarlow83/)
+# SPDX-FileCopyrightText: 2022 James R. Barlow
+# SPDX-License-Identifier: MPL-2.0
 
-"""Provide classes to stand in for PDF objects
+"""Provide classes to stand in for PDF objects.
 
 The purpose of these is to provide nice-looking classes to allow explicit
 construction of PDF objects and more pythonic idioms and facilitate discovery
@@ -19,19 +16,19 @@ instances of ``pikepdf.Object``, which is a variant container object. The
 class definition is present as an aide for code introspection.
 """
 
+from __future__ import annotations
+
 # pylint: disable=unused-import, abstract-method
-
 from secrets import token_urlsafe
-from typing import TYPE_CHECKING, Any, Iterable, Mapping, Optional, Union, cast
-from warnings import warn
+from typing import TYPE_CHECKING, Any, Iterable, Mapping, cast
 
-from . import _qpdf
-from ._qpdf import Object, ObjectType, Rectangle
+from . import _core
+from ._core import Object, ObjectType, Rectangle
 
 if TYPE_CHECKING:  # pragma: no cover
     from pikepdf import Pdf
 
-# By default pikepdf.Object will identify itself as pikepdf._qpdf.Object
+# By default pikepdf.Object will identify itself as pikepdf._core.Object
 # Here we change the module to discourage people from using that internal name
 # Instead it will become pikepdf.objects.Object
 Object.__module__ = __name__
@@ -44,7 +41,7 @@ ObjectType.__module__ = __name__
 
 
 class _ObjectMeta(type(Object)):  # type: ignore
-    """Supports instance checking."""
+    """Support instance checking."""
 
     def __instancecheck__(self, instance: Any) -> bool:
         # Note: since this class is a metaclass, self is a class object
@@ -54,7 +51,7 @@ class _ObjectMeta(type(Object)):  # type: ignore
 
 
 class _NameObjectMeta(_ObjectMeta):
-    """Supports usage pikepdf.Name.Whatever -> Name('/Whatever')."""
+    """Support usage pikepdf.Name.Whatever -> Name('/Whatever')."""
 
     def __getattr__(self, attr: str) -> Any:
         if attr.startswith('_') or attr == 'object_type':
@@ -70,7 +67,7 @@ class _NameObjectMeta(_ObjectMeta):
             "modify a Dictionary rather than a Name?"
         )
 
-    def __getitem__(self, item: str) -> 'Name':
+    def __getitem__(self, item: str) -> Name:
         if item.startswith('/'):
             item = item[1:]
         raise TypeError(
@@ -82,7 +79,7 @@ class _NameObjectMeta(_ObjectMeta):
 
 
 class Name(Object, metaclass=_NameObjectMeta):
-    """Constructs a PDF Name object.
+    """Construct a PDF Name object.
 
     Names can be constructed with two notations:
 
@@ -97,37 +94,38 @@ class Name(Object, metaclass=_NameObjectMeta):
 
     object_type = ObjectType.name_
 
-    def __new__(cls, name: Union[str, 'Name']) -> 'Name':
+    def __new__(cls, name: str | Name) -> Name:
+        """Construct a PDF Name."""
         # QPDF_Name::unparse ensures that names are always saved in a UTF-8
         # compatible way, so we only need to guard the input.
         if isinstance(name, bytes):
             raise TypeError("Name should be str")
         if isinstance(name, Name):
             return name  # Names are immutable so we can return a reference
-        return _qpdf._new_name(name)
+        return _core._new_name(name)
 
     @classmethod
-    def random(cls, len_: int = 16, prefix: str = '') -> 'Name':
+    def random(cls, len_: int = 16, prefix: str = '') -> Name:
         """Generate a cryptographically strong random, valid PDF Name.
 
         This function uses Python's secrets.token_urlsafe, which returns a
         URL-safe encoded random number of the desired length. An optional
         *prefix* may be prepended. (The encoding is ultimately done with
-        :func:`base64.urlsafe_b64encode`.) Serendipitiously, URL-safe is also
+        :func:`base64.urlsafe_b64encode`.) Serendipitously, URL-safe is also
         PDF-safe.
 
-        When the length paramater is 16 (16 random bytes or 128 bits), the result
+        When the length parameter is 16 (16 random bytes or 128 bits), the result
         is probably globally unique and can be treated as never colliding with
         other names.
 
         The length of the string may vary because it is encoded.
         """
         random_string = token_urlsafe(len_)
-        return _qpdf._new_name(f"/{prefix}{random_string}")
+        return _core._new_name(f"/{prefix}{random_string}")
 
 
 class Operator(Object, metaclass=_ObjectMeta):
-    """Constructs an operator for use in a content stream.
+    """Construct an operator for use in a content stream.
 
     An Operator is one of a limited set of commands that can appear in PDF content
     streams (roughly the mini-language that draws objects, lines and text on a
@@ -141,17 +139,19 @@ class Operator(Object, metaclass=_ObjectMeta):
 
     object_type = ObjectType.operator
 
-    def __new__(cls, name: str) -> 'Operator':
-        return cast('Operator', _qpdf._new_operator(name))
+    def __new__(cls, name: str) -> Operator:
+        """Construct an operator."""
+        return cast('Operator', _core._new_operator(name))
 
 
 class String(Object, metaclass=_ObjectMeta):
-    """Constructs a PDF String object."""
+    """Construct a PDF String object."""
 
     object_type = ObjectType.string
 
-    def __new__(cls, s: Union[str, bytes]) -> 'String':
-        """
+    def __new__(cls, s: str | bytes) -> String:
+        """Construct a PDF String.
+
         Args:
             s: The string to use. String will be encoded for
                 PDF, bytes will be constructed without encoding.
@@ -160,17 +160,18 @@ class String(Object, metaclass=_ObjectMeta):
             pikepdf.Object
         """
         if isinstance(s, bytes):
-            return _qpdf._new_string(s)
-        return _qpdf._new_string_utf8(s)
+            return _core._new_string(s)
+        return _core._new_string_utf8(s)
 
 
 class Array(Object, metaclass=_ObjectMeta):
-    """Constructs a PDF Array object."""
+    """Construct a PDF Array object."""
 
     object_type = ObjectType.array
 
-    def __new__(cls, a: Optional[Union[Iterable, Rectangle]] = None) -> 'Array':
-        """
+    def __new__(cls, a: Iterable | Rectangle | None = None) -> Array:
+        """Construct a PDF Array.
+
         Args:
             a: An iterable of objects. All objects must be either
                 `pikepdf.Object` or convertible to `pikepdf.Object`.
@@ -178,27 +179,27 @@ class Array(Object, metaclass=_ObjectMeta):
         Return type:
             pikepdf.Array
         """
-
         if isinstance(a, (str, bytes)):
             raise TypeError('Strings cannot be converted to arrays of chars')
-        elif a is None:
+
+        if a is None:
             a = []
         elif isinstance(a, Rectangle):
             return a.as_array()
         elif isinstance(a, Array):
             return cast(Array, a.__copy__())
-        return _qpdf._new_array(a)
+        return _core._new_array(a)
 
 
 class Dictionary(Object, metaclass=_ObjectMeta):
-    """Constructs a PDF Dictionary object."""
+    """Construct a PDF Dictionary object."""
 
     object_type = ObjectType.dictionary
 
-    def __new__(cls, d: Optional[Mapping] = None, **kwargs) -> 'Dictionary':
-        """
-        Constructs a PDF Dictionary from either a Python ``dict`` or keyword
-        arguments.
+    def __new__(cls, d: Mapping | None = None, **kwargs) -> Dictionary:
+        """Construct a PDF Dictionary.
+
+        Works from either a Python ``dict`` or keyword arguments.
 
         These two examples are equivalent:
 
@@ -220,7 +221,7 @@ class Dictionary(Object, metaclass=_ObjectMeta):
         if kwargs:
             # Add leading slash
             # Allows Dictionary(MediaBox=(0,0,1,1), Type=Name('/Page')...
-            return _qpdf._new_dictionary({('/' + k): v for k, v in kwargs.items()})
+            return _core._new_dictionary({('/' + k): v for k, v in kwargs.items()})
         if isinstance(d, Dictionary):
             # Already a dictionary
             return d.__copy__()
@@ -228,21 +229,19 @@ class Dictionary(Object, metaclass=_ObjectMeta):
             d = {}
         if d and any(key == '/' or not key.startswith('/') for key in d.keys()):
             raise KeyError("Dictionary created from strings must begin with '/'")
-        return _qpdf._new_dictionary(d)
+        return _core._new_dictionary(d)
 
 
 class Stream(Object, metaclass=_ObjectMeta):
-    """Constructs a PDF Stream object."""
+    """Construct a PDF Stream object."""
 
     object_type = ObjectType.stream
 
-    def __new__(
-        cls, owner: 'Pdf', data: Optional[bytes] = None, d=None, **kwargs
-    ) -> 'Stream':
-        """
-        Create a new stream object, which stores arbitrary binary data and may
-        or may not be compressed. It also may or may not be a page or
-        Form XObject's content stream.
+    def __new__(cls, owner: Pdf, data: bytes | None = None, d=None, **kwargs) -> Stream:
+        """Create a new stream object.
+
+        Streams stores arbitrary binary data and may or may not be compressed.
+        It also may or may not be a page or Form XObject's content stream.
 
         A stream dictionary is like a pikepdf.Dictionary or Python dict, except
         it has a binary payload of data attached. The dictionary describes
@@ -283,7 +282,6 @@ class Stream(Object, metaclass=_ObjectMeta):
         .. versionchanged:: 3.0
             Deprecated ``obj`` argument was removed; use ``data``.
         """
-
         if data is None:
             raise TypeError("Must make Stream from binary data")
 
@@ -291,7 +289,7 @@ class Stream(Object, metaclass=_ObjectMeta):
         if d or kwargs:
             stream_dict = Dictionary(d, **kwargs)
 
-        stream = _qpdf._new_stream(owner, data)
+        stream = _core._new_stream(owner, data)
         if stream_dict:
             stream.stream_dict = stream_dict
         return stream

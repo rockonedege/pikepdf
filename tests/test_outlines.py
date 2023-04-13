@@ -1,3 +1,8 @@
+# SPDX-FileCopyrightText: 2022 James R. Barlow
+# SPDX-License-Identifier: CC0-1.0
+
+from __future__ import annotations
+
 from datetime import timedelta
 from itertools import repeat
 
@@ -14,7 +19,7 @@ from pikepdf import (
     Pdf,
     make_page_destination,
 )
-from pikepdf.models.outlines import ALL_PAGE_LOCATION_KWARGS, Outline
+from pikepdf.models.outlines import ALL_PAGE_LOCATION_KWARGS
 
 # pylint: disable=redefined-outer-name
 
@@ -445,6 +450,11 @@ def test_page_destination(resources, page_num, page_loc, kwargs):
     title='',
     page_num=0,
     page_loc='FitR',
+)
+@example(
+    title='þÿ',
+    page_num=0,
+    page_loc=PageLocation.XYZ,
 )
 def test_new_item(resources, title, page_num, page_loc):
     # @given precludes use of outlines_doc fixture - causes hypothesis health check to

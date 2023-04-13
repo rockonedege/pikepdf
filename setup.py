@@ -1,3 +1,8 @@
+# SPDX-FileCopyrightText: 2022 James R. Barlow
+# SPDX-License-Identifier: MPL-2.0
+
+from __future__ import annotations
+
 import sys
 from glob import glob
 from itertools import chain
@@ -12,31 +17,49 @@ from setuptools import Extension, setup
 extra_includes = []
 extra_library_dirs = []
 qpdf_source_tree = environ.get('QPDF_SOURCE_TREE', '')
+qpdf_build_libdir = environ.get('QPDF_BUILD_LIBDIR', '')
 
-# If CFLAGS is defined, disable any efforts to shim the build, because
-# the caller is probably a maintainer and knows what they are doing.
+if qpdf_source_tree:
+    # Point this to qpdf source tree built with shared libraries
+    extra_includes.append(join(qpdf_source_tree, 'include'))
+    if not qpdf_build_libdir:
+        raise Exception(
+            'Please set QPDF_BUILD_LIBDIR to the directory'
+            ' containing your libqpdf.so built from'
+            ' $QPDF_SOURCE_TREE'
+        )
+    extra_library_dirs.append(join(qpdf_build_libdir))
+
+# Here we have two different use cases. Some users will end up here because
+# their package manager couldn't find a suitable binary wheel and they have to
+# compile from source. Also downstream maintainers prefer sdists.
+# Our priority is trying to make things work as cleanly as possible for users
+# who want to do a source build. It's an imperfect test, but downstream build
+# environments usually define CFLAGS to something interesting, and users who call
+# "pip install pikepdf" probably don't. So we use this to check if we activate
+# shims.
 cflags_defined = bool(environ.get('CFLAGS', ''))
+shims_enabled = not cflags_defined
 
-if not cflags_defined:
-    if qpdf_source_tree:
-        # Point this to qpdf source tree built with shared libaries
-        extra_includes.append(join(qpdf_source_tree, 'include'))
-        extra_library_dirs.append(join(qpdf_source_tree, 'libqpdf/build/.libs'))
-
+# If shims are enabled, we add some known locations where QPDF and other third party
+# libraries might be installed, in hopes the build will succeed if we suggest the
+# obvious.
+if shims_enabled and not qpdf_source_tree:
     if 'bsd' in sys.platform:
-        extra_includes.append('/usr/local/include')
+        shim_includes = ['/usr/local/include']
+        shim_libdirs = []
     elif 'darwin' in sys.platform and machine() == 'arm64':
-        extra_includes.append('/opt/homebrew/include')
-        extra_library_dirs.append('/opt/homebrew/lib')
+        shim_includes = ['/opt/homebrew/include', '/opt/local/include']
+        shim_libdirs = ['/opt/homebrew/lib', '/opt/local/lib']
+    else:
+        shim_includes = []
+        shim_libdirs = []
+    extra_includes.extend(shim for shim in shim_includes if exists(shim))
+    extra_library_dirs.extend(shim for shim in shim_libdirs if exists(shim))
 
-try:
-    from setuptools_scm import get_version
-
-    __version__ = get_version()
-except ImportError:
-    __version__ = '0.0.1'
-
-
+# Regardless of shimming, we want to let users know when some parameter they supplied
+# resulted in a non-existent path being added to the list, so they can figure out
+# what went wrong.
 for extra_path in chain([qpdf_source_tree], extra_includes, extra_library_dirs):
     if extra_path and not exists(extra_path):
         raise FileNotFoundError(extra_path)
@@ -46,27 +69,28 @@ for extra_path in chain([qpdf_source_tree], extra_includes, extra_library_dirs):
 extmodule: Extension = cast(
     Extension,
     Pybind11Extension(
-        'pikepdf._qpdf',
-        sorted(glob('src/qpdf/*.cpp')),
-        depends=sorted(glob('src/qpdf/*.h')),
+        'pikepdf._core',
+        sorted(glob('src/core/*.cpp')),
+        depends=sorted(glob('src/core/*.h')),
         include_dirs=[
             # Path to pybind11 headers
             *extra_includes,
         ],
+        define_macros=[('POINTERHOLDER_TRANSITION', '4')],
         library_dirs=[*extra_library_dirs],
         libraries=['qpdf'],
         cxx_std=17,
     ),
 )
 
-if not cflags_defined:
+if shims_enabled:
+    eca = extmodule.extra_compile_args
     if sys.platform == 'cygwin':
         # On cygwin, use gnu++17 instead of c++17
-        eca = extmodule.extra_compile_args
         eca[eca.index('-std=c++17')] = '-std=gnu++17'
 
     # Debug build
-    # module[0].extra_compile_args.append('-g3')
+    # eca.append('-g3')
 
     if qpdf_source_tree:
         for lib in extra_library_dirs:
@@ -75,11 +99,6 @@ if not cflags_defined:
 if __name__ == '__main__':
     with ParallelCompile("PIKEPDF_NUM_BUILD_JOBS"):  # optional envvar
         setup(
-            setup_requires=[  # can be removed whenever we can drop pip 9 support
-                'setuptools_scm',  # so that version will work
-                'setuptools_scm_git_archive',  # enable version from github tarballs
-            ],
             ext_modules=[extmodule],
-            use_scm_version=True,
             cmdclass={"build_ext": build_ext},  # type: ignore
         )

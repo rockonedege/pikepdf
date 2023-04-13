@@ -1,10 +1,8 @@
-# This Source Code Form is subject to the terms of the Mozilla Public
-# License, v. 2.0. If a copy of the MPL was not distributed with this
-# file, You can obtain one at http://mozilla.org/MPL/2.0/.
-#
-# Copyright (C) 2017, James R. Barlow (https://github.com/jbarlow83/)
+# SPDX-FileCopyrightText: 2022 James R. Barlow
+# SPDX-License-Identifier: MPL-2.0
 
-"""
+"""Implement some features in Python and monkey-patch them onto C++ classes.
+
 In several cases the implementation of some higher levels features might as
 well be in Python. Fortunately we can attach Python methods to C++ class
 bindings after the fact.
@@ -12,10 +10,10 @@ bindings after the fact.
 We can also move the implementation to C++ if desired.
 """
 
+from __future__ import annotations
+
 import datetime
-import inspect
 import mimetypes
-import platform
 import shutil
 from collections.abc import KeysView, MutableMapping
 from decimal import Decimal
@@ -23,29 +21,18 @@ from io import BytesIO
 from pathlib import Path
 from subprocess import run
 from tempfile import NamedTemporaryFile
-from typing import (
-    Any,
-    BinaryIO,
-    Callable,
-    ItemsView,
-    Iterator,
-    List,
-    Optional,
-    Tuple,
-    Type,
-    TypeVar,
-    Union,
-    ValuesView,
-)
+from typing import BinaryIO, Callable, ItemsView, Iterator, TypeVar, ValuesView
 from warnings import warn
 
 from . import Array, Dictionary, Name, Object, Page, Pdf, Stream
-from ._qpdf import (
+from ._augments import augment_override_cpp, augments
+from ._core import (
     AccessMode,
     AttachedFile,
     AttachedFileSpec,
     Attachments,
     NameTree,
+    NumberTree,
     ObjectStreamMode,
     Rectangle,
     StreamDecodeLevel,
@@ -62,127 +49,6 @@ from .models.metadata import decode_pdf_date, encode_pdf_date
 __all__ = []
 
 Numeric = TypeVar('Numeric', int, float, Decimal)
-
-
-def augment_override_cpp(fn):
-    """This Python function should replace the C++ implementation, if there is one."""
-    fn._augment_override_cpp = True
-    return fn
-
-
-def augment_if_no_cpp(fn):
-    """This Python function provides a Python implementation if no C++ implementation exists."""
-    fn._augment_if_no_cpp = True
-    return fn
-
-
-def _is_inherited_method(meth):
-    # Augmenting a C++ with a method that cls inherits from the Python
-    # object is never what we want.
-    return meth.__qualname__.startswith('object.')
-
-
-def _is_augmentable(m):
-    return (
-        inspect.isfunction(m) and not _is_inherited_method(m)
-    ) or inspect.isdatadescriptor(m)
-
-
-def augments(cls_cpp: Type[Any]):
-    """Attach methods of a Python support class to an existing class
-
-    This monkeypatches all methods defined in the support class onto an
-    existing class. Example:
-
-    .. code-block:: python
-
-        @augments(ClassDefinedInCpp)
-        class SupportClass:
-            def foo(self):
-                pass
-
-    The Python method 'foo' will be monkeypatched on ClassDefinedInCpp. SupportClass
-    has no meaning on its own and should not be used, but gets returned from
-    this function so IDE code inspection doesn't get too confused.
-
-    We don't subclass because it's much more convenient to monkeypatch Python
-    methods onto the existing Python binding of the C++ class. For one thing,
-    this allows the implementation to be moved from Python to C++ or vice
-    versa. It saves having to implement an intermediate Python subclass and then
-    ensures that the C++ superclass never 'leaks' to pikepdf users. Finally,
-    wrapper classes and subclasses can become problematic if the call stack
-    crosses the C++/Python boundary multiple times.
-
-    Any existing methods may be used, regardless of whether they are defined
-    elsewhere in the support class or in the target class.
-
-    For data fields to work, the target class must be
-    tagged ``py::dynamic_attr`` in pybind11.
-
-    Strictly, the target class does not have to be C++ or derived from pybind11.
-    This works on pure Python classes too.
-
-    THIS DOES NOT work for class methods.
-
-    (Alternative ideas: https://github.com/pybind/pybind11/issues/1074)
-    """
-
-    OVERRIDE_WHITELIST = {'__eq__', '__hash__', '__repr__'}
-    if platform.python_implementation() == 'PyPy':
-        # Either PyPy or pybind11's interface to PyPy automatically adds a __getattr__
-        OVERRIDE_WHITELIST |= {'__getattr__'}  # pragma: no cover
-
-    def class_augment(cls, cls_cpp=cls_cpp):
-
-        # inspect.getmembers has different behavior on PyPy - in particular it seems
-        # that a typical PyPy class like cls will have more methods that it considers
-        # methods than CPython does. Our predicate should take care of this.
-        for name, member in inspect.getmembers(cls, predicate=_is_augmentable):
-            if name == '__weakref__':
-                continue
-            if (
-                hasattr(cls_cpp, name)
-                and hasattr(cls, name)
-                and name not in getattr(cls, '__abstractmethods__', set())
-                and name not in OVERRIDE_WHITELIST
-                and not getattr(getattr(cls, name), '_augment_override_cpp', False)
-            ):
-                if getattr(getattr(cls, name), '_augment_if_no_cpp', False):
-                    # If tagged as "augment if no C++", we are supported older pybind11
-                    # versions that may not define some functions. If pybind11 provides
-                    # the required function, don't override it.
-                    continue
-
-                # If the original C++ class and Python support class both define the
-                # same name, we generally have a conflict, because this is augmentation
-                # not inheritance. However, if the method provided by the support class
-                # is an abstract method, then we can consider the C++ version the
-                # implementation. Also, pybind11 provides defaults for __eq__,
-                # __hash__ and __repr__ that we often do want to override directly.
-
-                raise RuntimeError(  # pragma: no cover
-                    f"C++ {cls_cpp} and Python {cls} both define the same "
-                    f"non-abstract method {name}: "
-                    f"{getattr(cls_cpp, name, '')!r}, "
-                    f"{getattr(cls, name, '')!r}"
-                )
-            if inspect.isfunction(member):
-                setattr(cls_cpp, name, member)
-                installed_member = getattr(cls_cpp, name)
-                installed_member.__qualname__ = member.__qualname__.replace(
-                    cls.__name__, cls_cpp.__name__
-                )
-            elif inspect.isdatadescriptor(member):
-                setattr(cls_cpp, name, member)
-
-        def disable_init(self):
-            # Prevent initialization of the support class
-            raise NotImplementedError(self.__class__.__name__ + '.__init__')
-
-        cls.__init__ = disable_init
-        return cls
-
-    return class_augment
 
 
 def _single_page_pdf(page) -> bytes:
@@ -265,10 +131,10 @@ class Extend_Object:
         for k in del_keys:
             del self[k]  # pylint: disable=unsupported-delete-operation
 
-    def _type_check_write(self, filter, decode_parms):
-        if isinstance(filter, list):
-            filter = Array(filter)
-        filter = filter.wrap_in_array()
+    def _type_check_write(self, filter_, decode_parms):
+        if isinstance(filter_, list):
+            filter_ = Array(filter_)
+        filter_ = filter_.wrap_in_array()
 
         if isinstance(decode_parms, list):
             decode_parms = Array(decode_parms)
@@ -277,7 +143,7 @@ class Extend_Object:
         else:
             decode_parms = decode_parms.wrap_in_array()
 
-        if not all(isinstance(item, Name) for item in filter):
+        if not all(isinstance(item, Name) for item in filter_):
             raise TypeError(
                 "filter must be: pikepdf.Name or pikepdf.Array([pikepdf.Name])"
             )
@@ -288,29 +154,28 @@ class Extend_Object:
                 "decode_parms must be: pikepdf.Dictionary or "
                 "pikepdf.Array([pikepdf.Dictionary])"
             )
-        if len(decode_parms) != 0 and len(filter) != len(decode_parms):
+        if len(decode_parms) != 0 and len(filter_) != len(decode_parms):
             raise ValueError(
-                f"filter ({repr(filter)}) and decode_parms "
+                f"filter ({repr(filter_)}) and decode_parms "
                 f"({repr(decode_parms)}) must be arrays of same length"
             )
-        if len(filter) == 1:
-            filter = filter[0]
+        if len(filter_) == 1:
+            filter_ = filter_[0]
         if len(decode_parms) == 0:
             decode_parms = None
         elif len(decode_parms) == 1:
             decode_parms = decode_parms[0]
-        return filter, decode_parms
+        return filter_, decode_parms
 
     def write(
         self,
         data: bytes,
         *,
-        filter: Union[Name, Array, None] = None,
-        decode_parms: Union[Dictionary, Array, None] = None,
+        filter: Name | Array | None = None,
+        decode_parms: Dictionary | Array | None = None,
         type_check: bool = True,
     ):  # pylint: disable=redefined-builtin
-        """
-        Replace stream object's data with new (possibly compressed) `data`.
+        """Replace stream object's data with new (possibly compressed) `data`.
 
         `filter` and `decode_parms` describe any compression that is already
         present on the input `data`. For example, if your data is already
@@ -343,7 +208,6 @@ class Extend_Object:
         `decode_parms` is an Array of Dictionary, where each array index
         is corresponds to the filter.
         """
-
         if type_check and filter is not None:
             filter, decode_parms = self._type_check_write(filter, decode_parms)
 
@@ -355,12 +219,11 @@ class Extend_Pdf:
     def _repr_mimebundle_(
         self, include=None, exclude=None
     ):  # pylint: disable=unused-argument
-        """
-        Present options to IPython or Jupyter for rich display of this object
+        """Present options to IPython or Jupyter for rich display of this object.
 
-        See https://ipython.readthedocs.io/en/stable/config/integrating.html#rich-display
+        See:
+        https://ipython.readthedocs.io/en/stable/config/integrating.html#rich-display
         """
-
         bio = BytesIO()
         self.save(bio)
         bio.seek(0)
@@ -370,8 +233,7 @@ class Extend_Pdf:
 
     @property
     def docinfo(self) -> Dictionary:
-        """
-        Access the (deprecated) document information dictionary.
+        """Access the (deprecated) document information dictionary.
 
         The document information dictionary is a brief metadata record that can
         store some information about the origin of a PDF. It is deprecated and
@@ -419,8 +281,7 @@ class Extend_Pdf:
         update_docinfo: bool = True,
         strict: bool = False,
     ) -> PdfMetadata:
-        """
-        Open the PDF's XMP metadata for editing.
+        """Open the PDF's XMP metadata for editing.
 
         There is no ``.close()`` function on the metadata object, since this is
         intended to be used inside a ``with`` block only.
@@ -467,8 +328,7 @@ class Extend_Pdf:
         )
 
     def open_outline(self, max_depth: int = 15, strict: bool = False) -> Outline:
-        """
-        Open the PDF outline ("bookmarks") for editing.
+        """Open the PDF outline ("bookmarks") for editing.
 
         Recommend for use in a ``with`` block. Changes are committed to the
         PDF when the block exits. (The ``Pdf`` must still be opened.)
@@ -498,8 +358,7 @@ class Extend_Pdf:
         return Outline(self, max_depth=max_depth, strict=strict)
 
     def make_stream(self, data: bytes, d=None, **kwargs) -> Stream:
-        """
-        Create a new pikepdf.Stream object that is attached to this PDF.
+        """Create a new pikepdf.Stream object that is attached to this PDF.
 
         See:
             :meth:`pikepdf.Stream.__new__`
@@ -508,11 +367,12 @@ class Extend_Pdf:
         return Stream(self, data, d, **kwargs)
 
     def add_blank_page(
-        self, *, page_size: Tuple[Numeric, Numeric] = (612.0, 792.0)
+        self, *, page_size: tuple[Numeric, Numeric] = (612.0, 792.0)
     ) -> Page:
-        """
-        Add a blank page to this PDF. If pages already exist, the page will be added to
-        the end. Pages may be reordered using ``Pdf.pages``.
+        """Add a blank page to this PDF.
+
+        If pages already exist, the page will be added to the end. Pages may be
+        reordered using ``Pdf.pages``.
 
         The caller may add content to the page by modifying its objects after creating
         it.
@@ -536,8 +396,7 @@ class Extend_Pdf:
         return Page(page_obj)
 
     def close(self) -> None:
-        """
-        Close a ``Pdf`` object and release resources acquired by pikepdf.
+        """Close a ``Pdf`` object and release resources acquired by pikepdf.
 
         If pikepdf opened the file handle it will close it (e.g. when opened with a file
         path). If the caller opened the file for pikepdf, the caller close the file.
@@ -548,9 +407,9 @@ class Extend_Pdf:
         case for :class:`pikepdf.Stream` but can be true for any object. Do not close
         the `Pdf` object if you might still be accessing content from it.
 
-        When an ``Object`` is copied from one ``Pdf`` to another, the ``Object`` is copied into
-        the destination ``Pdf`` immediately, so after accessing all desired information
-        from the source ``Pdf`` it may be closed.
+        When an ``Object`` is copied from one ``Pdf`` to another, the ``Object`` is
+        copied into the destination ``Pdf`` immediately, so after accessing all desired
+        information from the source ``Pdf`` it may be closed.
 
         .. versionchanged:: 3.0
             In pikepdf 2.x, this function actually worked by resetting to a very short
@@ -568,8 +427,7 @@ class Extend_Pdf:
 
     @property
     def allow(self) -> Permissions:
-        """
-        Report permissions associated with this PDF.
+        """Report permissions associated with this PDF.
 
         By default these permissions will be replicated when the PDF is
         saved. Permissions may also only be changed when a PDF is being saved,
@@ -585,16 +443,39 @@ class Extend_Pdf:
 
     @property
     def encryption(self) -> EncryptionInfo:
-        """
-        Report encryption information for this PDF.
+        """Report encryption information for this PDF.
 
         Encryption settings may only be changed when a PDF is saved.
         """
         return EncryptionInfo(self._encryption_data)
 
-    def check(self) -> List[str]:
-        """
-        Check if PDF is well-formed.  Similar to ``qpdf --check``.
+    def check(self) -> list[str]:
+        """Check if PDF is syntactically well-formed.
+
+        Similar to ``qpdf --check``, checks for syntax
+        or structural problems in the PDF. This is mainly useful to PDF
+        developers and may not be informative to the average user. PDFs with
+        these problems still render correctly, if PDF viewers are capable of
+        working around the issues they contain. In many cases, pikepdf can
+        also fix the problems.
+
+        An example problem found by this function is a xref table that is
+        missing an object reference. A page dictionary with the wrong type of
+        key, such as a string instead of an array of integers for its mediabox,
+        is not the sort of issue checked for. If this were an XML checker, it
+        would tell you if the XML is well-formed, but could not tell you if
+        the XML is valid XHTML or if it can be rendered as a usable web page.
+
+        This function also attempts to decompress all streams in the PDF.
+        If no JBIG2 decoder is available and JBIG2 images are presented,
+        a warning will occur that JBIG2 cannot be checked.
+
+        This function returns a list of strings describing the issues. The
+        text is subject to change and should not be treated as a stable API.
+
+        Returns:
+            Empty list if no issues were found. List of issues as text strings
+            if issues were found.
         """
 
         class DiscardingParser(StreamParser):
@@ -607,7 +488,7 @@ class Extend_Pdf:
             def handle_eof(self):
                 pass
 
-        problems: List[str] = []
+        problems: list[str] = []
 
         self._decode_all_streams_and_discard()
 
@@ -622,25 +503,25 @@ class Extend_Pdf:
 
     def save(
         self,
-        filename_or_stream: Union[Path, str, BinaryIO, None] = None,
+        filename_or_stream: Path | str | BinaryIO | None = None,
         *,
         static_id: bool = False,
         preserve_pdfa: bool = True,
-        min_version: Union[str, Tuple[str, int]] = "",
-        force_version: Union[str, Tuple[str, int]] = "",
+        min_version: str | tuple[str, int] = "",
+        force_version: str | tuple[str, int] = "",
         fix_metadata_version: bool = True,
         compress_streams: bool = True,
-        stream_decode_level: Optional[StreamDecodeLevel] = None,
+        stream_decode_level: StreamDecodeLevel | None = None,
         object_stream_mode: ObjectStreamMode = ObjectStreamMode.preserve,
         normalize_content: bool = False,
         linearize: bool = False,
         qdf: bool = False,
         progress: Callable[[int], None] = None,
-        encryption: Optional[Union[Encryption, bool]] = None,
+        encryption: Encryption | bool | None = None,
         recompress_flate: bool = False,
+        deterministic_id: bool = False,
     ) -> None:
-        """
-        Save all modifications to this :class:`pikepdf.Pdf`.
+        """Save all modifications to this :class:`pikepdf.Pdf`.
 
         Args:
             filename_or_stream: Where to write the output. If a file
@@ -654,8 +535,10 @@ class Extend_Pdf:
 
             static_id: Indicates that the ``/ID`` metadata, normally
                 calculated as a hash of certain PDF contents and metadata
-                including the current time, should instead be generated
-                deterministically. Normally for debugging.
+                including the current time, should instead be set to a static
+                value. Only use this for debugging and testing. Use
+                ``deterministic_id`` if you want to get the same ``/ID`` for
+                the same document contents.
             preserve_pdfa: Ensures that the file is generated in a
                 manner compliant with PDF/A and other stricter variants.
                 This should be True, the default, in most cases.
@@ -684,14 +567,33 @@ class Extend_Pdf:
                 creating the smallest files but requiring PDF 1.5+.
 
             compress_streams: Enables or disables the compression of
-                stream objects in the PDF that are created without specifying
-                any compression setting. Metadata is never compressed.
-                By default this is set to ``True``, and should be except
-                for debugging. Existing streams in the PDF or streams will not
-                be modified. To decompress existing streams, you must set
+                uncompressed stream objects. By default this is set to
+                ``True``, and the only reason to set it to ``False`` is for
+                debugging or inspecting PDF contents.
+
+                When enabled, uncompressed stream objects will be compressed
+                whether they were uncompressed in the PDF when it was opened,
+                or when the user creates new :class:`pikepdf.Stream` objects
+                attached to the PDF. Stream objects can also be created
+                indirectly, such as when content from another PDF is merged
+                into the one being saved.
+
+                Only stream objects that have no compression will be
+                compressed when this object is set. If the object is
+                compressed, compression will be preserved.
+
+                Setting compress_streams=False does not trigger decompression
+                unless decompression is specifically requested by setting
                 both ``compress_streams=False`` and ``stream_decode_level``
                 to the desired decode level (e.g. ``.generalized`` will
                 decompress most non-image content).
+
+                This option does not trigger recompression of existing
+                compressed streams. For that, use ``recompress_flate``.
+
+                The XMP metadata stream object, if present, is never
+                compressed, to facilitate metadata reading by parsers that
+                don't understand the full structure of PDF.
 
             stream_decode_level: Specifies how
                 to encode stream objects. See documentation for
@@ -728,6 +630,14 @@ class Extend_Pdf:
                 encryption settings are copied from the originating PDF.
                 Alternately, an ``Encryption`` object may be provided that
                 sets the parameters for new encryption.
+
+            deterministic_id: Indicates that the ``/ID`` metadata, normally
+                calculated as a hash of certain PDF contents and metadata
+                including the current time, should instead be computed using
+                only deterministic data like the file contents. At a small
+                runtime cost, this enables generation of the same ``/ID`` if
+                the same inputs are converted in the same way multiple times.
+                Does not work for encrypted files.
 
         Raises:
             PdfError
@@ -788,13 +698,14 @@ class Extend_Pdf:
             encryption=encryption,
             samefile_check=getattr(self, '_tmp_stream', None) is None,
             recompress_flate=recompress_flate,
+            deterministic_id=deterministic_id,
         )
 
     @staticmethod
     def open(
-        filename_or_stream: Union[Path, str, BinaryIO],
+        filename_or_stream: Path | str | BinaryIO,
         *,
-        password: Union[str, bytes] = "",
+        password: str | bytes = "",
         hex_password: bool = False,
         ignore_xref_streams: bool = False,
         suppress_warnings: bool = True,
@@ -803,8 +714,7 @@ class Extend_Pdf:
         access_mode: AccessMode = AccessMode.default,
         allow_overwriting_input: bool = False,
     ) -> Pdf:
-        """
-        Open an existing file at *filename_or_stream*.
+        """Open an existing file at *filename_or_stream*.
 
         If *filename_or_stream* is path-like, the file will be opened for reading.
         The file should not be modified by another process while it is open in
@@ -834,7 +744,6 @@ class Extend_Pdf:
         release that object when appropriate.
 
         Examples:
-
             >>> with Pdf.open("test.pdf") as pdf:
                     ...
 
@@ -875,6 +784,7 @@ class Extend_Pdf:
                 entire input file into memory at open time; this will use more
                 memory and may recent performance especially when the opened
                 file will not be modified.
+
         Raises:
             pikepdf.PasswordError: If the password failed to open the
                 file.
@@ -943,13 +853,17 @@ class Extend_ObjectMapping:
         except KeyError:
             return default
 
-    @augment_if_no_cpp  # Remove this shim when dropping pybind11 < 2.8.0 support
-    def keys(self):
-        return KeysView(self)
+    @augment_override_cpp
+    def __contains__(self, key: Name | str) -> bool:
+        if isinstance(key, Name):
+            key = str(key)
+        return _ObjectMapping._cpp__contains__(self, key)
 
-    @augment_if_no_cpp  # Remove this shim when dropping pybind11 < 2.8.0 support
-    def values(self):
-        return (v for _k, v in self.items())
+    @augment_override_cpp
+    def __getitem__(self, key: Name | str) -> Object:
+        if isinstance(key, Name):
+            key = str(key)
+        return _ObjectMapping._cpp__getitem__(self, key)
 
 
 def check_is_box(obj) -> None:
@@ -973,7 +887,7 @@ def check_is_box(obj) -> None:
 class Extend_Page:
     @property
     def mediabox(self):
-        "This page's /MediaBox, in PDF units."
+        """Return page's /MediaBox, in PDF units."""
         return self._get_mediabox(True)
 
     @mediabox.setter
@@ -983,11 +897,11 @@ class Extend_Page:
 
     @property
     def cropbox(self):
-        """This page's effective /CropBox, in PDF units.
+        """Return page's effective /CropBox, in PDF units.
 
         If the /CropBox is not defined, the /MediaBox is returned.
         """
-        return self._get_cropbox(True)
+        return self._get_cropbox(True, False)
 
     @cropbox.setter
     def cropbox(self, value):
@@ -996,12 +910,12 @@ class Extend_Page:
 
     @property
     def trimbox(self):
-        """This page's effective /TrimBox, in PDF units.
+        """Return page's effective /TrimBox, in PDF units.
 
         If the /TrimBox is not defined, the /CropBox is returned (and if
         /CropBox is not defined, /MediaBox is returned).
         """
-        return self._get_trimbox(True)
+        return self._get_trimbox(True, False)
 
     @trimbox.setter
     def trimbox(self, value):
@@ -1010,24 +924,48 @@ class Extend_Page:
 
     @property
     def images(self) -> _ObjectMapping:
-        """Return all images associated with this page."""
+        """Return all regular images associated with this page.
+
+        This method does not search for Form XObjects that contain images,
+        and does not attempt to find inline images.
+        """
         return self._images
 
     @property
+    def form_xobjects(self) -> _ObjectMapping:
+        """Return all Form XObjects associated with this page.
+
+        This method does not recurse into nested Form XObjects.
+
+        .. versionadded:: 7.0.0
+        """
+        return self._form_xobjects
+
+    @property
     def resources(self) -> Dictionary:
-        """Return this page's resources dictionary."""
-        return self.obj['/Resources']
+        """Return this page's resources dictionary.
+
+        .. versionchanged:: 7.0.0
+            If the resources dictionary does not exist, an empty one will be created.
+            A TypeError is raised if a page has a /Resources key but it is not a
+            dictionary.
+        """
+        if Name.Resources not in self.obj:
+            self.obj.Resources = Dictionary()
+        elif not isinstance(self.obj.Resources, Dictionary):
+            raise TypeError("Page /Resources exists but is not a dictionary")
+        return self.obj.Resources
 
     def add_resource(
         self,
         res: Object,
         res_type: Name,
-        name: Optional[Name] = None,
+        name: Name | None = None,
         *,
         prefix: str = '',
         replace_existing: bool = True,
     ) -> Name:
-        """Adds a new resource to the page's Resources dictionary.
+        """Add a new resource to the page's Resources dictionary.
 
         If the Resources dictionaries do not exist, they will be created.
 
@@ -1059,12 +997,7 @@ class Extend_Page:
             Returns the name of the overlay in the resources dictionary instead
             of returning None.
         """
-        if Name.Resources not in self.obj:
-            self.obj.Resources = Dictionary()
-        elif not isinstance(self.obj.Resources, Dictionary):
-            raise TypeError("Page /Resources exists but is not a dictionary")
-        resources = self.obj.Resources
-
+        resources = self.resources
         if res_type not in resources:
             resources[res_type] = Dictionary()
 
@@ -1088,7 +1021,7 @@ class Extend_Page:
     def _over_underlay(
         self,
         other,
-        rect: Optional[Rectangle],
+        rect: Rectangle | None,
         under: bool,
         push_stack: bool,
         shrink: bool,
@@ -1129,8 +1062,8 @@ class Extend_Page:
 
     def add_overlay(
         self,
-        other: Union[Object, Page],
-        rect: Optional[Rectangle] = None,
+        other: Object | Page,
+        rect: Rectangle | None = None,
         *,
         push_stack: bool = True,
         shrink: bool = True,
@@ -1151,7 +1084,7 @@ class Extend_Page:
                 content stream to ensure that the overlay is rendered correctly.
                 Officially PDF limits the graphics stack depth to 32. Most
                 viewers will tolerate more, but excessive pushes may cause problems.
-                Multiple content streams may also be coalseced into a single content
+                Multiple content streams may also be coalesced into a single content
                 stream where this parameter is True, since the PDF specification
                 permits PDF writers to coalesce streams as they see fit.
             shrink: If True (default), allow the object to shrink to fit inside the
@@ -1187,8 +1120,8 @@ class Extend_Page:
 
     def add_underlay(
         self,
-        other: Union[Object, Page],
-        rect: Optional[Rectangle] = None,
+        other: Object | Page,
+        rect: Rectangle | None = None,
         *,
         shrink: bool = True,
         expand: bool = True,
@@ -1226,7 +1159,7 @@ class Extend_Page:
             other, rect, under=True, push_stack=False, expand=expand, shrink=shrink
         )
 
-    def contents_add(self, contents: Union[Stream, bytes], *, prepend: bool = False):
+    def contents_add(self, contents: Stream | bytes, *, prepend: bool = False):
         """Append or prepend to an existing page's content stream.
 
         Args:
@@ -1243,14 +1176,16 @@ class Extend_Page:
     @augment_override_cpp
     def __setattr__(self, name, value):
         if hasattr(self.__class__, name):
-            return object.__setattr__(self, name, value)
-        setattr(self.obj, name, value)
+            object.__setattr__(self, name, value)
+        else:
+            setattr(self.obj, name, value)
 
     @augment_override_cpp
     def __delattr__(self, name):
         if hasattr(self.__class__, name):
-            return object.__delattr__(self, name)
-        delattr(self.obj, name)
+            object.__delattr__(self, name)
+        else:
+            delattr(self.obj, name)
 
     def __getitem__(self, key):
         return self.obj[key]
@@ -1263,9 +1198,6 @@ class Extend_Page:
 
     def __contains__(self, key):
         return key in self.obj
-
-    def __eq__(self, other):
-        return self.obj == other.obj
 
     def get(self, key, default=None):
         try:
@@ -1339,13 +1271,13 @@ class Extend_Attachments(MutableMapping):
         yield from self._get_all_filespecs()
 
     def __repr__(self):
-        return f"<pikepdf._qpdf.Attachments with {len(self)} attached files>"
+        return f"<pikepdf._core.Attachments with {len(self)} attached files>"
 
 
 @augments(AttachedFileSpec)
 class Extend_AttachedFileSpec:
     @staticmethod
-    def from_filepath(pdf: Pdf, path: Union[Path, str], *, description: str = ''):
+    def from_filepath(pdf: Pdf, path: Path | str, *, description: str = ''):
         """Construct a file specification from a file path.
 
         This function will automatically add a creation and modified date
@@ -1382,17 +1314,16 @@ class Extend_AttachedFileSpec:
     def __repr__(self):
         if self.filename:
             return (
-                f"<pikepdf._qpdf.AttachedFileSpec for {self.filename!r}, "
+                f"<pikepdf._core.AttachedFileSpec for {self.filename!r}, "
                 f"description {self.description!r}>"
             )
-        else:
-            return f"<pikepdf._qpdf.AttachedFileSpec description {self.description!r}>"
+        return f"<pikepdf._core.AttachedFileSpec description {self.description!r}>"
 
 
 @augments(AttachedFile)
 class Extend_AttachedFile:
     @property
-    def creation_date(self) -> Optional[datetime.datetime]:
+    def creation_date(self) -> datetime.datetime | None:
         if not self._creation_date:
             return None
         return decode_pdf_date(self._creation_date)
@@ -1402,7 +1333,7 @@ class Extend_AttachedFile:
         self._creation_date = encode_pdf_date(value)
 
     @property
-    def mod_date(self) -> Optional[datetime.datetime]:
+    def mod_date(self) -> datetime.datetime | None:
         if not self._mod_date:
             return None
         return decode_pdf_date(self._mod_date)
@@ -1416,21 +1347,14 @@ class Extend_AttachedFile:
 
     def __repr__(self):
         return (
-            f'<pikepdf._qpdf.AttachedFile objid={self.obj.objgen} size={self.size} '
+            f'<pikepdf._core.AttachedFile objid={self.obj.objgen} size={self.size} '
             f'mime_type={self.mime_type} creation_date={self.creation_date} '
             f'mod_date={self.mod_date}>'
         )
 
 
 @augments(NameTree)
-class Extend_NameTree(MutableMapping):
-    def __len__(self):
-        return len(self._as_map())
-
-    def __iter__(self):
-        for name, _value in self._nameval_iter():
-            yield name
-
+class Extend_NameTree:
     def keys(self):
         return KeysView(self._as_map())
 
@@ -1440,27 +1364,34 @@ class Extend_NameTree(MutableMapping):
     def items(self):
         return ItemsView(self._as_map())
 
-    def __eq__(self, other):
-        return self.obj.objgen == other.obj.objgen
+    get = MutableMapping.get
+    pop = MutableMapping.pop
+    popitem = MutableMapping.popitem
+    clear = MutableMapping.clear
+    update = MutableMapping.update
+    setdefault = MutableMapping.setdefault
 
-    def __contains__(self, name: Union[str, bytes]) -> bool:
-        """
-        Returns True if the name tree contains the specified name.
 
-        Args:
-            name (str or bytes): The name to search for in the name tree.
-                This is not a PDF /Name object, but an arbitrary key.
-                If name is a *str*, we search the name tree for the UTF-8
-                encoded form of name. If *bytes*, we search for a key
-                equal to those bytes.
-        """
-        return self._contains(name)
+MutableMapping.register(NameTree)
 
-    def __getitem__(self, name: Union[str, bytes]) -> Object:
-        return self._getitem(name)
 
-    def __setitem__(self, name: Union[str, bytes], o: Object):
-        self._setitem(name, o)
+@augments(NumberTree)
+class Extend_NumberTree:
+    def keys(self):
+        return KeysView(self._as_map())
 
-    def __delitem__(self, name: Union[str, bytes]):
-        self._delitem(name)
+    def values(self):
+        return ValuesView(self._as_map())
+
+    def items(self):
+        return ItemsView(self._as_map())
+
+    get = MutableMapping.get
+    pop = MutableMapping.pop
+    popitem = MutableMapping.popitem
+    clear = MutableMapping.clear
+    update = MutableMapping.update
+    setdefault = MutableMapping.setdefault
+
+
+MutableMapping.register(NumberTree)

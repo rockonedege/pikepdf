@@ -1,22 +1,24 @@
-# This Source Code Form is subject to the terms of the Mozilla Public
-# License, v. 2.0. If a copy of the MPL was not distributed with this
-# file, You can obtain one at http://mozilla.org/MPL/2.0/.
-#
-# Copyright (C) 2017, James R. Barlow (https://github.com/jbarlow83/)
+# SPDX-FileCopyrightText: 2022 James R. Barlow
+# SPDX-License-Identifier: MPL-2.0
 
-"""
-Support functions called by the C++ library binding layer. Not intended to be
-called from Python, and subject to change at any time.
+"""Support functions called by the C++ library binding layer.
+
+Not intended to be called from Python, and subject to change at any time.
 """
 
-from typing import Callable, Dict, Union
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Callable
 from warnings import warn
 
-from pikepdf import Dictionary, Name, Pdf
+from pikepdf.objects import Name
+
+if TYPE_CHECKING:
+    from pikepdf import Dictionary, Pdf
 
 
 def update_xmp_pdfversion(pdf: Pdf, version: str) -> None:
-
+    """Update XMP metadata to specified PDF version."""
     if Name.Metadata not in pdf.Root:
         return  # Don't create an empty XMP object just to store the version
 
@@ -39,7 +41,7 @@ def _alpha(n: int) -> str:
 
 
 def _roman(n: int) -> str:
-    """Converts integer n to Roman numeral representation as a string."""
+    """Convert integer n to Roman numeral representation as a string."""
     if not (1 <= n <= 5000):
         raise ValueError(f"Can't represent {n} in Roman numerals")
     roman_numerals = (
@@ -65,7 +67,7 @@ def _roman(n: int) -> str:
     return roman
 
 
-LABEL_STYLE_MAP: Dict[Name, Callable[[int], str]] = {
+LABEL_STYLE_MAP: dict[Name, Callable[[int], str]] = {
     Name.D: str,
     Name.A: _alpha,
     Name.a: lambda x: _alpha(x).lower(),
@@ -74,9 +76,8 @@ LABEL_STYLE_MAP: Dict[Name, Callable[[int], str]] = {
 }
 
 
-def label_from_label_dict(label_dict: Union[int, Dictionary]) -> str:
+def label_from_label_dict(label_dict: int | Dictionary) -> str:
     """Convert a label dictionary returned by QPDF into a text string."""
-
     if isinstance(label_dict, int):
         return str(label_dict)
 

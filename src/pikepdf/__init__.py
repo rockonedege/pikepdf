@@ -1,16 +1,14 @@
-# This Source Code Form is subject to the terms of the Mozilla Public
-# License, v. 2.0. If a copy of the MPL was not distributed with this
-# file, You can obtain one at http://mozilla.org/MPL/2.0/.
-#
-# Copyright (C) 2017, James R. Barlow (https://github.com/jbarlow83/)
+# SPDX-FileCopyrightText: 2022 James R. Barlow
+# SPDX-License-Identifier: MPL-2.0
 
-"""A library for manipulating PDFs
+"""A library for manipulating PDFs."""
 
-isort:skip_file
-"""
+# isort:skip_file
+
+from __future__ import annotations
 
 try:
-    from . import _qpdf
+    from . import _core
 except ImportError as _e:  # pragma: no cover
     _msg = "pikepdf's extension library failed to import"
     raise ImportError(_msg) from _e
@@ -20,15 +18,20 @@ try:
 except ImportError as _e:  # pragma: no cover
     raise ImportError("Failed to determine version") from _e
 
-from ._qpdf import (
+from ._core import (
     AccessMode,
     Annotation,
     AttachedFileSpec,
     ContentStreamInlineImage,
     ContentStreamInstruction,
     DataDecodingError,
+    DeletedObjectError,
     ForeignObjectError,
+    Job,
+    JobUsageError,
     NameTree,
+    NumberTree,
+    ObjectHelper,
     ObjectStreamMode,
     Page,
     PasswordError,
@@ -40,7 +43,6 @@ from ._qpdf import (
     TokenFilter,
     TokenType,
 )
-
 from .objects import (
     Array,
     Dictionary,
@@ -51,7 +53,6 @@ from .objects import (
     Stream,
     String,
 )
-
 from .models import (
     Encryption,
     Outline,
@@ -68,15 +69,15 @@ from .models import (
     unparse_content_stream,
 )
 
-from . import _methods, codec
-
+# Importing these will monkeypatch classes defined in C++ and register a new
+# pdfdoc codec
 # While _cpphelpers is intended to be called from our C++ code only, explicitly
 # importing helps introspection tools like PyInstaller figure out that the module
 # is necessary.
-from . import _cpphelpers
+from . import _cpphelpers, _methods, codec  # noqa: unused-import
+from . import settings
 
-__libqpdf_version__ = _qpdf.qpdf_version()
-
+__libqpdf_version__ = _core.qpdf_version()
 
 # Provide pikepdf.{open, new} -> pikepdf.Pdf.{open, new}
 open = Pdf.open  # pylint: disable=redefined-builtin
@@ -89,7 +90,51 @@ new = Pdf.new
 _exclude_from__all__ = {'open', 'new', 'codec', 'objects', 'jbig2'}
 
 __all__ = [
-    k
-    for k in locals().keys()
-    if not k.startswith('_') and k not in _exclude_from__all__
+    'AccessMode',
+    'Annotation',
+    'AttachedFileSpec',
+    'ContentStreamInlineImage',
+    'ContentStreamInstruction',
+    'DataDecodingError',
+    'DeletedObjectError',
+    'ForeignObjectError',
+    'Job',
+    'JobUsageError',
+    'NameTree',
+    'NumberTree',
+    'ObjectHelper',
+    'ObjectStreamMode',
+    'Page',
+    'PasswordError',
+    'Pdf',
+    'PdfError',
+    'Rectangle',
+    'StreamDecodeLevel',
+    'Token',
+    'TokenFilter',
+    'TokenType',
+    'Array',
+    'Dictionary',
+    'Name',
+    'Object',
+    'ObjectType',
+    'Operator',
+    'Stream',
+    'String',
+    'models',
+    'Encryption',
+    'Outline',
+    'OutlineItem',
+    'OutlineStructureError',
+    'PageLocation',
+    'PdfImage',
+    'PdfInlineImage',
+    'PdfMatrix',
+    'Permissions',
+    'UnsupportedImageTypeError',
+    'make_page_destination',
+    'parse_content_stream',
+    'unparse_content_stream',
+    'settings',
+    '__version__',
 ]

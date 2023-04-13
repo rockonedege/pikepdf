@@ -1,11 +1,9 @@
-# This Source Code Form is subject to the terms of the Mozilla Public
-# License, v. 2.0. If a copy of the MPL was not distributed with this
-# file, You can obtain one at http://mozilla.org/MPL/2.0/.
-#
-# Copyright (C) 2017, James R. Barlow (https://github.com/jbarlow83/)
+# SPDX-FileCopyrightText: 2022 James R. Barlow
+# SPDX-License-Identifier: MPL-2.0
 
+"""Python implementation of higher level PDF constructs."""
 
-from pikepdf import Object, ObjectType, Operator, Page, PdfError, _qpdf
+from __future__ import annotations
 
 from ._content_stream import (
     ContentStreamInstructions,
@@ -25,3 +23,24 @@ from .outlines import (
     PageLocation,
     make_page_destination,
 )
+
+__all__ = [
+    'ContentStreamInstructions',
+    'PdfParsingError',
+    'UnparseableContentStreamInstructions',
+    'parse_content_stream',
+    'unparse_content_stream',
+    'Encryption',
+    'EncryptionInfo',
+    'Permissions',
+    'PdfImage',
+    'PdfInlineImage',
+    'UnsupportedImageTypeError',
+    'PdfMatrix',
+    'PdfMetadata',
+    'Outline',
+    'OutlineItem',
+    'OutlineStructureError',
+    'PageLocation',
+    'make_page_destination',
+]

@@ -1,8 +1,12 @@
+# SPDX-FileCopyrightText: 2022 James R. Barlow
+# SPDX-License-Identifier: CC0-1.0
+
 """
 Test IPython/Jupyter display hooks
 """
 
-import shutil
+from __future__ import annotations
+
 import subprocess
 from io import BytesIO
 

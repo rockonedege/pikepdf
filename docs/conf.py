@@ -11,15 +11,35 @@
 # All configuration values have a default; values that are commented out
 # serve to show the default.
 
+from __future__ import annotations
+
 import io
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
-import tomli
+try:
+    import tomllib
+except ModuleNotFoundError:
+    import tomli as tomllib  # type: ignore
+
+
+extensions = [
+    'sphinx.ext.autodoc',
+    'sphinx.ext.intersphinx',
+    'sphinx.ext.autosummary',
+    'sphinx.ext.napoleon',
+    'sphinx_issues',
+    'sphinx_design',
+    'IPython.sphinxext.ipython_console_highlighting',
+    'IPython.sphinxext.ipython_directive',
+    'fix_pybind11_autodoc',
+]
 
 on_rtd = os.environ.get('READTHEDOCS') == 'True'
+
 if on_rtd:
     import tempfile
     import zipfile
@@ -39,14 +59,21 @@ if on_rtd:
     runs = (
         g.get_repo('pikepdf/pikepdf').get_workflow('build.yml').get_runs(branch=branch)
     )
-
     artifacts_url = next(r for r in runs if r.head_sha == head_sha).artifacts_url
 
-    archive_download_url = next(
-        artifact
-        for artifact in requests.get(artifacts_url).json()['artifacts']
-        if artifact['name'] == 'rtd-wheel'
-    )['archive_download_url']
+    archive_download_url = ""
+    for i in range(5):
+        try:
+            archive_download_url = next(
+                artifact
+                for artifact in requests.get(artifacts_url).json()['artifacts']
+                if artifact['name'] == 'rtd-wheel'
+            )['archive_download_url']
+            break
+        except StopIteration:
+            if i == 4:
+                raise
+            time.sleep(15)
     artifact_bin = io.BytesIO(
         requests.get(
             archive_download_url,
@@ -81,21 +108,6 @@ import pikepdf  # isort:skip pylint: disable=unused-import
 # If your documentation needs a minimal Sphinx version, state it here.
 # needs_sphinx = '1.0'
 
-# Add any Sphinx extension module names here, as strings. They can be
-# extensions coming with Sphinx (named 'sphinx.ext.*') or your custom
-# ones.
-extensions = [
-    'sphinx.ext.autodoc',
-    'sphinx.ext.intersphinx',
-    'sphinx.ext.autosummary',
-    'sphinx.ext.napoleon',
-    'sphinx_issues',
-    'sphinx_design',
-    'IPython.sphinxext.ipython_console_highlighting',
-    'IPython.sphinxext.ipython_directive',
-    'fix_pybind11_autodoc',
-]
-
 issues_github_path = "pikepdf/pikepdf"
 
 ipython_execlines = ['import pikepdf', 'from pikepdf import Pdf']
@@ -106,7 +118,7 @@ autosummary_generate = True
 templates_path = ['_templates']
 
 with open('../pyproject.toml', 'rb') as f:
-    pyproject_toml = tomli.load(f)
+    pyproject_toml = tomllib.load(f)
 toml_env = pyproject_toml['tool']['cibuildwheel']['environment']
 
 rst_prolog = f"""

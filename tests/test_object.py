@@ -1,13 +1,17 @@
+# SPDX-FileCopyrightText: 2022 James R. Barlow
+# SPDX-License-Identifier: CC0-1.0
+
+from __future__ import annotations
+
 import json
 import sys
 from copy import copy
 from decimal import Decimal, InvalidOperation
 from math import isclose, isfinite
-from typing import Type
 from zlib import compress
 
 import pytest
-from conftest import needs_libqpdf_v, skip_if_pypy
+from conftest import skip_if_pypy
 from hypothesis import assume, example, given
 from hypothesis.strategies import (
     binary,
@@ -31,12 +35,12 @@ from pikepdf import (
     Stream,
     String,
 )
-from pikepdf import _qpdf as qpdf
+from pikepdf import _core as core
 from pikepdf.models import parse_content_stream
 
 # pylint: disable=eval-used, redefined-outer-name
 
-encode = qpdf._encode
+encode = core._encode
 
 
 def test_none():
@@ -117,6 +121,11 @@ def test_decimal_from_float(f):
     else:
         with pytest.raises(PdfError):
             Object.parse(str(d))
+
+
+def test_qpdf_real_to_decimal():
+    assert isclose(core._new_real(1.2345, 4), Decimal('1.2345'), abs_tol=1e-5)
+    assert isclose(core._new_real('2.3456'), Decimal('2.3456'), abs_tol=1e-5)
 
 
 @skip_if_pypy
@@ -213,7 +222,9 @@ class TestArray:
         assert a == pikepdf.Array([1, Name.Foo, 4])
         a.extend([42, 666])
         assert a == pikepdf.Array([1, Name.Foo, 4, 42, 666])
-        with pytest.raises(ValueError, match='object is not a dictionary'):
+        with pytest.raises(
+            ValueError, match='pikepdf.Object is not a Dictionary or Stream'
+        ):
             del a.ImaginaryKey
         with pytest.raises(TypeError, match=r"items\(\) not available"):
             a.items()
@@ -238,6 +249,10 @@ class TestArray:
         a = pikepdf.Array(['1234', b'\x80\x81\x82'])
         assert pikepdf.String('1234') in a
         assert pikepdf.String(b'\x80\x81\x82') in a
+
+    def test_is_rect(self):
+        assert pikepdf.Array([0, 1, 2, 3]).is_rectangle
+        assert not pikepdf.Array(['a', '2', 3, 4]).is_rectangle
 
 
 def test_no_len():
@@ -321,76 +336,6 @@ def test_not_constructible():
         Object()
 
 
-class TestRepr:
-    def test_repr_dict(self):
-        d = Dictionary(
-            {
-                '/Boolean': True,
-                '/Integer': 42,
-                '/Real': Decimal('42.42'),
-                '/String': String('hi'),
-                '/Array': Array([1, 2, 3.14]),
-                '/Operator': Operator('q'),
-                '/Dictionary': Dictionary({'/Color': 'Red'}),
-                '/None': None,
-            }
-        )
-        short_pi = '3.14'
-        expected = (
-            """\
-            pikepdf.Dictionary({
-                "/Array": [ 1, 2, Decimal('%s') ],
-                "/Boolean": True,
-                "/Dictionary": {
-                    "/Color": "Red"
-                },
-                "/Integer": 42,
-                "/None": None,
-                "/Operator": pikepdf.Operator("q"),
-                "/Real": Decimal('42.42'),
-                "/String": "hi"
-            })
-        """
-            % short_pi
-        )
-
-        def strip_all_whitespace(s):
-            return ''.join(s.split())
-
-        assert strip_all_whitespace(repr(d)) == strip_all_whitespace(expected)
-        assert eval(repr(d)) == d
-
-    def test_repr_scalar(self):
-        scalars = [
-            False,
-            666,
-            Decimal('3.14'),
-            String('scalar'),
-            Name('/Bob'),
-            Operator('Q'),
-        ]
-        for s in scalars:
-            assert eval(repr(s)) == s
-
-    def test_repr_indirect(self, resources):
-        with pikepdf.open(resources / 'graph.pdf') as graph:
-            repr_page0 = repr(graph.pages[0])
-            assert repr_page0[0] == '<', 'should not be constructible'
-
-    def test_repr_circular(self):
-        with pikepdf.new() as pdf:
-            pdf.Root.Circular = pdf.make_indirect(Dictionary())
-            pdf.Root.Circular.Parent = pdf.make_indirect(Dictionary())
-            pdf.Root.Circular.Parent = pdf.make_indirect(pdf.Root.Circular)
-            assert '.get_object' in repr(pdf.Root.Circular)
-
-    def test_repr_indirect_page(self, resources):
-        with pikepdf.open(resources / 'outlines.pdf') as outlines:
-            assert 'from_objgen' in repr(outlines.Root.Pages.Kids)
-            # An indirect page reference in the Dests name tree
-            assert 'from_objgen' in repr(outlines.Root.Names.Dests.Kids[0].Names[1])
-
-
 def test_operator_inline(resources):
     with pikepdf.open(resources / 'image-mono-inline.pdf') as pdf:
         instructions = parse_content_stream(pdf.pages[0], operators='BI ID EI')
@@ -438,9 +383,8 @@ class TestDictionary:
             pass
 
     def test_str(self):
-        d = pikepdf.Dictionary(A='a')
-        with pytest.raises(NotImplementedError):
-            str(d)
+        d = pikepdf.Dictionary(ABCD='abcd')
+        assert 'ABCD' in str(d)
 
     def test_attr(self):
         d = pikepdf.Dictionary(A='a')
@@ -526,20 +470,20 @@ def test_json():
     assert as_dict == {
         "/Array": [1, 2, 3.14],
         "/Boolean": True,
-        "/Dictionary": {"/Color": "Red"},
+        "/Dictionary": {"/Color": "u:Red"},
         "/Integer": 42,
         "/Real": 42.42,
-        "/String": "hi",
+        "/String": "u:hi",
     }
 
 
 class TestStream:
     @pytest.fixture(scope="function")
     def abcxyz_stream(self):
-        pdf = pikepdf.new()
-        data = b'abcxyz'
-        stream = Stream(pdf, data)
-        return stream
+        with pikepdf.new() as pdf:
+            data = b'abcxyz'
+            stream = Stream(pdf, data)
+            yield stream
 
     def test_stream_isinstance(self):
         pdf = pikepdf.new()
@@ -626,6 +570,17 @@ class TestStream:
         stream2.stream_dict.SomeData = 1
         assert stream2 != stream1
 
+    def test_stream_refcount(self, refcount, outpdf):
+        pdf = pikepdf.new()
+        stream = Stream(pdf, b'blahblah')
+        assert refcount(stream) == 2
+        pdf.Root.SomeStream = stream
+        assert refcount(stream) == 2
+        del stream
+        pdf.save(outpdf)
+        with pikepdf.open(outpdf) as pdf2:
+            assert pdf2.Root.SomeStream.read_bytes() == b'blahblah'
+
 
 @pytest.fixture
 def sandwich(resources):
@@ -636,8 +591,8 @@ def sandwich(resources):
 class TestStreamReadWrite:
     @pytest.fixture
     def stream_object(self):
-        pdf = pikepdf.new()
-        return Stream(pdf, b'')
+        with pikepdf.new() as pdf:
+            yield Stream(pdf, b'abc123xyz')
 
     def test_basic(self, stream_object):
         stream_object.write(b'abc')
@@ -699,6 +654,10 @@ class TestStreamReadWrite:
                 decode_parms=[Dictionary(), Dictionary()],
             )
 
+    def test_raw_stream_buffer(self, stream_object):
+        raw_buffer = stream_object.get_raw_stream_buffer()
+        assert bytes(raw_buffer) == b'abc123xyz'
+
 
 def test_copy():
     d = Dictionary(
@@ -758,6 +717,18 @@ class TestOperator:
 
     def test_operator_bytes(self):
         assert bytes(Operator('cm')) == b'cm'
+
+    def test_operator_contains_misuse(self):
+        with pytest.raises(
+            ValueError, match="pikepdf.Object is not a Dictionary or Stream"
+        ):
+            _unused = 'nope' in Operator('Do')
+
+    def test_operator_setitem_misuse(self):
+        with pytest.raises(
+            ValueError, match="pikepdf.Object is not a Dictionary or Stream"
+        ):
+            Operator('Do')['x'] = 42
 
 
 def test_object_mapping(sandwich):

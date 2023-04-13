@@ -1,24 +1,38 @@
-# This Source Code Form is subject to the terms of the Mozilla Public
-# License, v. 2.0. If a copy of the MPL was not distributed with this
-# file, You can obtain one at http://mozilla.org/MPL/2.0/.
-#
-# Copyright (C) 2017, James R. Barlow (https://github.com/jbarlow83/)
+# SPDX-FileCopyrightText: 2022 James R. Barlow
+# SPDX-License-Identifier: MPL-2.0
+
+"""PDF content matrix support."""
+
+from __future__ import annotations
 
 from math import cos, pi, sin
 
 
 class PdfMatrix:
-    """
-    Support class for PDF content stream matrices
+    """Support class for PDF content stream matrices.
 
     PDF content stream matrices are 3x3 matrices summarized by a shorthand
-    ``(a, b, c, d, e, f)`` which correspond to the first two column vectors.
-    The final column vector is always ``(0, 0, 1)`` since this is using
+    ``(a, b, c, d, e, f)``, where the first column vector is ``(a, c, e)``
+    and the second column vector is ``(b, d, f)``. The final column vector
+    is always ``(0, 0, 1)`` since PDF uses
     `homogenous coordinates <https://en.wikipedia.org/wiki/Homogeneous_coordinates>`_.
+
+    ``a`` is the horizontal scaling factor.
+    ``b`` is horizontal skewing.
+    ``c`` is vertical skewing.
+    ``d`` is the vertical scaling factor.
+    ``e`` is the horizontal translation.
+    ``f`` is the vertical translation.
+
+    For scaling, ``a`` and ``d`` are the scaling factors in the horizontal and vertical
+    directions, respectively; for pure scaling, ``b`` and ``c`` are zero.
 
     PDF uses row vectors.  That is, ``vr @ A'`` gives the effect of transforming
     a row vector ``vr=(x, y, 1)`` by the matrix ``A'``.  Most textbook
     treatments use ``A @ vc`` where the column vector ``vc=(x, y, 1)'``.
+
+    Matrices should be **premultipled** with other matrices to concatenate
+    transformations.
 
     (``@`` is the Python matrix multiplication operator.)
 
@@ -28,10 +42,10 @@ class PdfMatrix:
 
     PdfMatrix objects are immutable. All transformations on them produce a new
     matrix.
-
     """
 
     def __init__(self, *args):
+        """Initialize a PdfMatrix."""
         # fmt: off
         if not args:
             self.values = ((1, 0, 0), (0, 1, 0), (0, 0, 1))
@@ -52,19 +66,24 @@ class PdfMatrix:
                            tuple(args[0][1]),
                            tuple(args[0][2]))
         else:
+            try:
+                import numpy as np
+                if isinstance(args[0], (np.ndarray, np.generic)):
+                    self.values = tuple(map(tuple, args[0]))
+            except ImportError:
+                pass
             raise ValueError('invalid arguments: ' + repr(args))
         # fmt: on
 
     @staticmethod
     def identity():
-        """Constructs and returns an identity matrix."""
+        """Return an identity matrix."""
         return PdfMatrix()
 
     def __matmul__(self, other):
-        """Multiply this matrix by another matrix
+        """Multiply this matrix by another matrix.
 
         Can be used to concatenate transformations.
-
         """
         a = self.values
         b = other.values
@@ -75,18 +94,40 @@ class PdfMatrix:
             ]
         )
 
+    def __array__(self):
+        """Return a numpy array of the matrix.
+
+        This function requires numpy, which is an optional dependency of pikepdf.
+        If numpy is not installed, an ImportError will be raised.
+        """
+        import numpy as np
+
+        return np.array(self.values)
+
+    def inverse(self):
+        """Return the inverse of this matrix.
+
+        The inverse matrix reverses the transformation of the original matrix.
+
+        This function requires numpy, which is an optional dependency of pikepdf.
+        If numpy is not installed, an ImportError will be raised.
+        """
+        import numpy as np
+
+        return PdfMatrix(np.linalg.inv(self.__array__()))
+
     def scaled(self, x, y):
-        """Concatenates a scaling matrix on this matrix."""
+        """Concatenate a scaling matrix to this matrix."""
         return self @ PdfMatrix((x, 0, 0, y, 0, 0))
 
     def rotated(self, angle_degrees_ccw):
-        """Concatenates a rotation matrix on this matrix."""
+        """Concatenate a rotation matrix to this matrix."""
         angle = angle_degrees_ccw / 180.0 * pi
         c, s = cos(angle), sin(angle)
         return self @ PdfMatrix((c, s, -s, c, 0, 0))
 
     def translated(self, x, y):
-        """Translates this matrix."""
+        """Translate this matrix."""
         return self @ PdfMatrix((1, 0, 0, 1, x, y))
 
     @property
@@ -96,26 +137,38 @@ class PdfMatrix:
 
     @property
     def a(self):
+        """Return the horizontal scaling factor."""
         return self.values[0][0]
 
     @property
     def b(self):
+        """Return horizontal skew."""
         return self.values[0][1]
 
     @property
     def c(self):
+        """Return vertical skew."""
         return self.values[1][0]
 
     @property
     def d(self):
+        """Return the vertical scaling factor."""
         return self.values[1][1]
 
     @property
     def e(self):
+        """Return the horizontal translation.
+
+        Typically corresponds to translation on the x-axis.
+        """
         return self.values[2][0]
 
     @property
     def f(self):
+        """Return the vertical translation.
+
+        Typically corresponds to translation on the y-axis.
+        """
         return self.values[2][1]
 
     def __eq__(self, other):

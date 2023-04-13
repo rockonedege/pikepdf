@@ -1,9 +1,14 @@
-import os
+# SPDX-FileCopyrightText: 2022 James R. Barlow
+# SPDX-License-Identifier: CC0-1.0
+
+from __future__ import annotations
+
+from datetime import timedelta
 from io import BytesIO
 from pathlib import Path
 
 import pytest
-from hypothesis import example, given
+from hypothesis import example, given, settings
 from hypothesis.strategies import binary, characters, text
 
 import pikepdf.codec
@@ -37,6 +42,8 @@ def test_unicode_surrogate():
 
 @given(binary())
 @example(b'\x9f')
+@example(b'\xfe\xff')
+@example(b'\xff\xfe')
 def test_codec_involution(b):
     # For most binary strings, there is a pdfdoc decoding and the encoding of that
     # decoding recovers the initial string.
@@ -46,9 +53,13 @@ def test_codec_involution(b):
         # 0x7f, 0x9f, and 0xad have no defined mapping to Unicode, so we expect
         # strings contain them to raise a decoding exception
         assert set(e.object[e.start : e.end]) & set(b'\x7f\x9f\xad')
+    except UnicodeEncodeError as e:
+        assert "'pdfdoc' codec can't encode characters in position 0-1" in str(e)
+        assert b.startswith(b'\xfe\xff') or b.startswith(b'\xff\xfe')
 
 
 @given(text())
+@example('\xfe\xff')
 def test_break_encode(s):
     try:
         encoded_bytes = s.encode('pdfdoc')
@@ -78,34 +89,40 @@ pdfdoc_text = text(
         whitelist_categories=('N', 'L', 'M', 'P', 'Cs'),
         whitelist_characters=[chr(c) for c in pikepdf.codec.PDFDOC_ENCODABLE],
     ),
+    max_size=1000,
 )
 
 
-@pytest.mark.skipif(os.name == 'nt', reason="flakey timing on Windows")
 @given(pdfdoc_text)
+@example('\r\n')
+@example('\r')
+@example('\n')
+@settings(deadline=timedelta(seconds=4))  # CI workers can be flakey
 def test_open_encoding_pdfdoc_write(tmp_path_factory, s):
     folder = tmp_path_factory.mktemp('pdfdoc')
     txt = folder / 'pdfdoc.txt'
-    with open(txt, 'w', encoding='pdfdoc') as f:
+    with open(txt, 'w', encoding='pdfdoc', newline='') as f:
         try:
             f.write(s)
         except UnicodeEncodeError:
             return
-    assert txt.read_bytes().replace(b'\r\n', b'\n') == s.encode('pdfdoc')
+    assert txt.read_bytes() == s.encode('pdfdoc')
 
 
-@pytest.mark.skipif(os.name == 'nt', reason="flakey timing on Windows")
 @given(pdfdoc_text)
+@settings(deadline=timedelta(seconds=4))  # CI workers can be flakey
+@example('\r\n')
+@example('\r')
+@example('\n')
 def test_open_encoding_pdfdoc_read(tmp_path_factory, s: str):
-    s = s.replace('\r', '\n')
     folder = tmp_path_factory.mktemp('pdfdoc')
     txt: Path = folder / 'pdfdoc.txt'
-    try:
-        txt.write_text(s, encoding='pdfdoc')
-    except UnicodeEncodeError:
-        return
-
-    with open(txt, encoding='pdfdoc') as f:
+    with open(txt, 'w', encoding='pdfdoc', newline='') as f:
+        try:
+            f.write(s)
+        except UnicodeEncodeError:
+            return
+    with open(txt, encoding='pdfdoc', newline='') as f:
         result: str = f.read()
     assert result == s
 

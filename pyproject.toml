@@ -1,16 +1,97 @@
+# SPDX-FileCopyrightText: 2022 James R. Barlow
+# SPDX-License-Identifier: MPL-2.0
+
 [build-system]
 requires = [
-  "setuptools >= 52",
-  "wheel >= 0.35",
-  "setuptools_scm[toml] >= 6.4",
-  "setuptools_scm_git_archive",
-  "pybind11 >= 2.9.1, < 2.10.0"
+  "setuptools >= 61",
+  "setuptools-scm[toml] >= 7.0.5",
+  "wheel >= 0.37",
+  "pybind11 >= 2.10.1",
 ]
 build-backend = "setuptools.build_meta"
 
+[project]
+name = "pikepdf"
+dynamic = ["version"]
+description = "Read and write PDFs with Python, powered by qpdf"
+readme = "README.md"
+requires-python = ">= 3.8"
+keywords = ["PDF"]
+authors = [
+  { name = "James R. Barlow", email= "james@purplerock.ca"}
+]
+license = { text = "MPL-2.0" }
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Information Technology",
+    "License :: OSI Approved :: Mozilla Public License 2.0 (MPL 2.0)",
+    "Programming Language :: C++",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Programming Language :: Python :: Implementation :: PyPy",
+    "Topic :: Multimedia :: Graphics",
+    "Topic :: Software Development :: Libraries",
+]
+dependencies = [
+    "Pillow>=9.0",
+    "deprecation",
+    "lxml>=4.8",
+    "packaging",
+]
+
+[project.urls]
+documentation = "https://pikepdf.readthedocs.io/"
+repository = "https://github.com/pikepdf/pikepdf"
+changelog = "https://pikepdf.readthedocs.io/en/latest/releasenotes/index.html"
+
+[project.optional-dependencies]
+docs = [
+    "GitPython",
+    "PyGithub",
+    "Sphinx>=3",
+    "ipython",
+    "matplotlib",
+    "pybind11",
+    "requests",
+    "setuptools-scm",
+    "sphinx-design",
+    "sphinx-issues",
+    "sphinx-rtd-theme",
+    "tomli;python_version < '3.11'",
+]
+mypy = [
+    "lxml-stubs",
+    "types-Pillow",
+    "types-requests",
+    "types-setuptools",
+]
+test = [
+    "attrs>=20.2.0",
+    "coverage[toml]",
+    "hypothesis>=6.36",
+    "psutil>=5.9",
+    "pybind11",
+    "pytest>=6.2.5",
+    "pytest-cov>=3.0.0",
+    "pytest-timeout>=2.1.0",
+    "pytest-xdist>=2.5.0",
+    "python-dateutil>=2.8.1",
+    "python-xmp-toolkit>=2.0.1 ;sys_platform != 'nt' and platform_machine == 'x86_64'",
+    "tomli;python_version < '3.11'",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+pikepdf = ["*.dll", "py.typed"]
+
+[tool.setuptools_scm]
+
 [tool.black]
 line-length = 88
-target-version = ["py37", "py38"]
+target-version = ["py38", "py39", "py310", "py311"]
 skip-string-normalization = true
 include = '\.pyi?$'
 exclude = '''
@@ -34,52 +115,61 @@ exclude = '''
 [tool.cibuildwheel]
 test-command = "pytest -nauto {project}/tests"
 test-extras = "test"
-skip = "cp36-*"
+# cp36: ancient
+# pp37: discontinued by Pillow - https://pypi.org/project/Pillow/#files
+# pp*-win32: lxml does not build win32 for pp, so we can't support it
+# Reminder:
+#   build.yml sets CIBW_BUILD to select what can be built
+#   this file sets skip to deselect what cannot be built
+skip = ["cp36-*", "cp37-*", "pp37-*", "pp*-win32", "*musllinux*", "pp*-manylinux*_aarch64"]
 test-skip = "*_arm64 *_universal2:arm64"
 
 [tool.cibuildwheel.environment]
-QPDF_MIN_VERSION = "10.6.2"
-QPDF_VERSION = "10.6.3"
-QPDF_PATTERN = "https://github.com/qpdf/qpdf/releases/download/release-qpdf-VERSION/qpdf-VERSION.tar.gz"
-JPEG_RELEASE = "https://www.ijg.org/files/jpegsrc.v9d.tar.gz"
-ZLIB_RELEASE = "https://www.zlib.net/zlib-1.2.11.tar.gz"
+QPDF_MIN_VERSION = "11.2.0"
+QPDF_VERSION = "11.2.0"
+QPDF_PATTERN = "https://github.com/qpdf/qpdf/releases/download/vVERSION/qpdf-VERSION.tar.gz"
 
 [tool.cibuildwheel.linux]
 before-all = [
-  "yum install -y wget libxml2-devel libxslt-devel",
+  "yum install -y wget libxml2-devel libxslt-devel libjpeg-turbo-devel zlib-devel",
   "bash build-scripts/linux-install-libxmp.bash",
-  "bash build-scripts/linux-download-qpdf-deps.bash",
   "bash build-scripts/linux-download-qpdf.bash $QPDF_VERSION",
   "bash build-scripts/linux-build-wheel-deps.bash"
 ]
+environment-pass = ["CI"]
 manylinux-x86_64-image = "manylinux2014"
 manylinux-i686-image = "manylinux2014"
 manylinux-pypy_x86_64-image = "manylinux2014"
 manylinux-pypy_i686-image = "manylinux2014"
-skip = "*-musllinux_* pp39* pp*-manylinux*_i686"
+# Status of exotic images as of 2022-07
+# musllinux: see below
+# pp*-manylinux*_aarch64: no Pillow pypy-aarch64 wheels yet
 
 [[tool.cibuildwheel.overrides]]
-# As of 2022-04, musllinux image was based on Alpine 3.12
-# We need Alpine 3.16 or newer to get the required package versions
-# Check https://github.com/pypa/manylinux/blob/main/build.sh#L66 to see if
+# musllinux image was based on Alpine 3.12
+# We need Alpine 3.16 or newer to get newer required package versions
+# Check https://github.com/pypa/manylinux/blob/main/build.sh#L55 to see if
 # musllinux has been updated.
+# To test this, remove musllinux from the skip list in the table above.
 select = "*-musllinux*"
 before-all = [
   "apk add py3-lxml py3-pillow python3 py3-setuptools py3-pybind11-dev python3-dev py3-wheel qpdf-dev exempi-dev"
 ]
 
 [tool.cibuildwheel.macos]
-before-all = ["brew update", "brew install qpdf little-cms2"]
+# Use workaround until https://github.com/actions/setup-python/issues/577 is fixed
+before-all = ["sh -c 'brew update || true'", "sh -c 'brew install qpdf little-cms2 || true'"]
 
 [tool.cibuildwheel.windows]
-# pp3*-win32 fails because there is no wheel for lxml
-# pp3*-win_amd64 does not execute because cibuildwheel does not implement it
-# or PyPy3 doesn't work on Windows 64-bit, one or the other
-# Check https://pypi.org/project/lxml/#files to see if lxml is providing pp-*win
-# PyPy+Win32 seems like a very low priority combination
-skip = "pp3*"
 
 [tool.mypy]
+exclude = [
+  "^_qpdf\\.py$"
+]
+
+[[tool.mypy.overrides]]
+module = ["deprecation"]
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 minversion = "6.0"
@@ -101,6 +191,8 @@ exclude_lines = [
   # Don't complain if non-runnable code isn't run:
   "if 0:",
   "if __name__ == .__main__.:",
+  "if TYPE_CHECKING:",
+  "if typing.TYPE_CHECKING:"
 ]
 
 [tool.coverage.html]
@@ -118,3 +210,25 @@ known_third_party = [
   "pytest",
   "setuptools"
 ]
+
+[tool.ruff]
+select = [
+  "D", # pydocstyle
+  "E", # pycodestyle
+  "W", # pycodestyle
+  "F", # pyflakes
+  "I001", # isort
+  "UP", # pyupgrade
+]
+ignore = ["D105"]  # docstring in magic method
+src = ["src"]
+target-version = "py38"
+
+[tool.ruff.isort]
+known-first-party = ["pikepdf._core"]
+
+[tool.ruff.pydocstyle]
+convention = "google"
+
+[tool.ruff.per-file-ignores]
+"tests/*test*.py" = ["D", "E501"]

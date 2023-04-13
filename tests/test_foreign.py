@@ -1,8 +1,13 @@
-import copy
+# SPDX-FileCopyrightText: 2022 James R. Barlow
+# SPDX-License-Identifier: CC0-1.0
+
+from __future__ import annotations
 
 import pytest
 
-from pikepdf import Dictionary, ForeignObjectError, Name, Object, Page, Pdf, Stream
+from pikepdf import Dictionary, ForeignObjectError, Name, Pdf
+
+# pylint: disable=redefined-outer-name
 
 
 @pytest.fixture
@@ -86,7 +91,19 @@ def test_issue_271():
     p3 = f2.pages[1]
 
     assert p2.MediaBox[0] != p1.MediaBox[0]
-    assert Name.Rotate in p2 and Name.Rotate not in p1
+    assert Name.Rotate in p2
+    assert Name.Rotate not in p1
 
     assert p3.MediaBox[0] == p1.MediaBox[0]
     assert Name.Rotate not in p3
+
+
+def test_copy_foreign_refcount(refcount, vera, outlines):
+    assert refcount(outlines.Root.Names) == 2
+    vera.Root.Names = vera.copy_foreign(outlines.Root.Names)
+    assert refcount(outlines.Root.Names) == 2
+
+
+def test_copy_foreign_page_object(vera, outlines):
+    with pytest.raises(NotImplementedError, match="Pdf.pages"):
+        outlines.copy_foreign(vera.pages[0])

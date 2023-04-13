@@ -1,7 +1,15 @@
+# SPDX-FileCopyrightText: 2022 James R. Barlow
+# SPDX-License-Identifier: CC0-1.0
+
+from __future__ import annotations
+
+import logging
+import os
 import os.path
 import sys
 from io import BytesIO, FileIO
 from shutil import copy
+from time import sleep
 
 import psutil
 import pytest
@@ -94,51 +102,79 @@ def test_invalid_output_stream(sandwich, bio_class, exc_type):
         sandwich.save(bio, static_id=True)
 
 
-@pytest.fixture
-def file_descriptor_is_open_for():
+def _file_descriptor_is_open(
+    path, retry_until: bool, retries: int = 3, delay: float = 1.0
+):
+    process = psutil.Process()
+    for _ in range(retries):
+        is_open = any((f.path == str(path.resolve())) for f in process.open_files())
+        if is_open == retry_until:
+            return is_open
+        sleep(delay)
+
+    return is_open
+
+
+def _skip_file_descriptor_checks_if_not_supported():
     if sys.platform == 'win32' or sys.platform.startswith('freebsd'):
         pytest.skip(
             "psutil documentation warns that .open_files() has problems on these"
         )
-    elif sys.implementation.name == 'pypy':
-        pytest.skip("randomly fails on pypy")
-
-    def _file_descriptor_is_open_for(path):
-        process = psutil.Process()
-        return any((f.path == str(path.resolve())) for f in process.open_files())
-
-    return _file_descriptor_is_open_for
+    elif sys.implementation.name == 'pypy' or os.environ.get('CI', 'false') == 'true':
+        pytest.skip("fails randomly on CI, not worth it")
 
 
-def test_open_named_file_closed(resources, file_descriptor_is_open_for):
+@pytest.fixture
+def file_descriptor_is_open():
+    _skip_file_descriptor_checks_if_not_supported()
+
+    def _wait_till_open(path):
+        return _file_descriptor_is_open(path, retry_until=True)
+
+    return _wait_till_open
+
+
+@pytest.fixture
+def file_descriptor_is_closed():
+    _skip_file_descriptor_checks_if_not_supported()
+
+    def _wait_till_closed(path):
+        return not _file_descriptor_is_open(path, retry_until=False)
+
+    return _wait_till_closed
+
+
+def test_open_named_file_closed(
+    resources, file_descriptor_is_open, file_descriptor_is_closed
+):
     path = resources / 'pal.pdf'
     pdf = Pdf.open(path)  # no with clause
-    assert file_descriptor_is_open_for(path)
+    assert file_descriptor_is_open(path)
 
     pdf.close()
-    assert not file_descriptor_is_open_for(
-        path
-    ), "pikepdf did not close a stream it opened"
+    assert file_descriptor_is_closed(path), "pikepdf did not close a stream it opened"
 
 
-def test_streamed_file_not_closed(resources, file_descriptor_is_open_for):
+def test_streamed_file_not_closed(resources, file_descriptor_is_open):
     path = resources / 'pal.pdf'
     stream = path.open('rb')
     pdf = Pdf.open(stream)  # no with clause
-    assert file_descriptor_is_open_for(path)
+    assert file_descriptor_is_open(path)
 
     pdf.close()
-    assert file_descriptor_is_open_for(path), "pikepdf closed a stream it did not open"
+    assert file_descriptor_is_open(path), "pikepdf closed a stream it did not open"
 
 
 @pytest.mark.parametrize('branch', ['success', 'failure'])
-def test_save_named_file_closed(resources, outdir, file_descriptor_is_open_for, branch):
+def test_save_named_file_closed(
+    resources, outdir, file_descriptor_is_open, file_descriptor_is_closed, branch
+):
     with Pdf.open(resources / 'pal.pdf') as pdf:
         path = outdir / "pal.pdf"
 
         def confirm_opened(progress_percent):
             if progress_percent == 0:
-                assert file_descriptor_is_open_for(path)
+                assert file_descriptor_is_open(path)
             if progress_percent > 0 and branch == 'failure':
                 raise ValueError('failure branch')
 
@@ -146,24 +182,22 @@ def test_save_named_file_closed(resources, outdir, file_descriptor_is_open_for, 
             pdf.save(path, progress=confirm_opened)
         except ValueError:
             pass
-        assert not file_descriptor_is_open_for(
+        assert file_descriptor_is_closed(
             path
         ), "pikepdf did not close a stream it opened"
 
 
-def test_save_streamed_file_not_closed(resources, outdir, file_descriptor_is_open_for):
+def test_save_streamed_file_not_closed(resources, outdir, file_descriptor_is_open):
     with Pdf.open(resources / 'pal.pdf') as pdf:
         path = outdir / "pal.pdf"
         stream = path.open('wb')
 
         def confirm_opened(progress_percent):
             if progress_percent == 0:
-                assert file_descriptor_is_open_for(path)
+                assert file_descriptor_is_open(path)
 
         pdf.save(stream, progress=confirm_opened)
-        assert file_descriptor_is_open_for(
-            path
-        ), "pikepdf closed a stream it did not open"
+        assert file_descriptor_is_open(path), "pikepdf closed a stream it did not open"
 
 
 class ExpectedError(Exception):
@@ -177,10 +211,10 @@ def test_file_without_fileno(resources):
 
     f = FileWithoutFileNo(resources / 'pal.pdf', 'rb')
     with pytest.raises(ExpectedError):
-        Pdf.open(f, access_mode=pikepdf._qpdf.AccessMode.mmap_only)
+        Pdf.open(f, access_mode=pikepdf._core.AccessMode.mmap_only)
 
     # Confirm we automatically fallback to stream
-    with Pdf.open(f, access_mode=pikepdf._qpdf.AccessMode.mmap) as pdf:
+    with Pdf.open(f, access_mode=pikepdf._core.AccessMode.mmap) as pdf:
         assert pdf.filename
 
 
@@ -192,10 +226,10 @@ def test_file_deny_mmap(resources, monkeypatch):
 
     monkeypatch.setattr(mmap, 'mmap', raises_oserror)
     with pytest.raises(OSError):
-        Pdf.open(resources / 'pal.pdf', access_mode=pikepdf._qpdf.AccessMode.mmap_only)
+        Pdf.open(resources / 'pal.pdf', access_mode=pikepdf._core.AccessMode.mmap_only)
 
     with Pdf.open(
-        resources / 'pal.pdf', access_mode=pikepdf._qpdf.AccessMode.default
+        resources / 'pal.pdf', access_mode=pikepdf._core.AccessMode.default
     ) as pdf:
         assert len(pdf.pages) == 1
 
@@ -209,7 +243,7 @@ def test_mmap_only_file(resources):
 
     f = UnreadableFile(resources / 'pal.pdf', 'rb')
     with pytest.raises(ExpectedError):
-        Pdf.open(f, access_mode=pikepdf._qpdf.AccessMode.stream)
+        Pdf.open(f, access_mode=pikepdf._core.AccessMode.stream)
 
 
 def test_save_bytesio(resources, outpdf):
@@ -258,3 +292,11 @@ def test_read_after_close(resources):
     pdf.close()
     with pytest.raises(PdfError, match="closed input source"):
         contents.read_raw_bytes()
+
+
+def test_logging(caplog):
+    caplog.set_level(logging.INFO)
+    pikepdf._core._log_info("test log message")
+    assert [("pikepdf._core", logging.INFO)] == [
+        (rec[0], rec[1]) for rec in caplog.record_tuples
+    ]

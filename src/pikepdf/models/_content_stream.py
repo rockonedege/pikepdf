@@ -1,12 +1,13 @@
-# This Source Code Form is subject to the terms of the Mozilla Public
-# License, v. 2.0. If a copy of the MPL was not distributed with this
-# file, You can obtain one at http://mozilla.org/MPL/2.0/.
-#
-# Copyright (C) 2022, James R. Barlow (https://github.com/jbarlow83/)
+# SPDX-FileCopyrightText: 2022 James R. Barlow
+# SPDX-License-Identifier: MPL-2.0
+
+"""Content stream parsing."""
+
+from __future__ import annotations
 
 from typing import TYPE_CHECKING, Collection, List, Tuple, Union, cast
 
-from pikepdf import Object, ObjectType, Operator, Page, PdfError, _qpdf
+from pikepdf import Object, ObjectType, Operator, Page, PdfError, _core
 
 if TYPE_CHECKING:
     from pikepdf.models.image import PdfInlineImage
@@ -16,7 +17,7 @@ _OldContentStreamOperands = Collection[Union[Object, 'PdfInlineImage']]
 _OldContentStreamInstructions = Tuple[_OldContentStreamOperands, Operator]
 
 ContentStreamInstructions = Union[
-    _qpdf.ContentStreamInstruction, _qpdf.ContentStreamInlineImage
+    _core.ContentStreamInstruction, _core.ContentStreamInlineImage
 ]
 
 UnparseableContentStreamInstructions = Union[
@@ -25,6 +26,8 @@ UnparseableContentStreamInstructions = Union[
 
 
 class PdfParsingError(Exception):
+    """Error when parsing a PDF content stream."""
+
     def __init__(self, message=None, line=None):
         if not message:
             message = f"Error encoding content stream at line {line}"
@@ -33,10 +36,9 @@ class PdfParsingError(Exception):
 
 
 def parse_content_stream(
-    page_or_stream: Union[Object, Page], operators: str = ''
-) -> List[ContentStreamInstructions]:
-    """
-    Parse a PDF content stream into a sequence of instructions.
+    page_or_stream: Object | Page, operators: str = ''
+) -> list[ContentStreamInstructions]:
+    """Parse a PDF content stream into a sequence of instructions.
 
     A PDF content stream is list of instructions that describe where to render
     the text and graphics in a PDF. This is the starting point for analyzing
@@ -61,7 +63,6 @@ def parse_content_stream(
             all tokens are accepted.
 
     Example:
-
         >>> with pikepdf.Pdf.open(input_pdf) as pdf:
         >>>     page = pdf.pages[0]
         >>>     for operands, command in parse_content_stream(page):
@@ -71,9 +72,7 @@ def parse_content_stream(
         Returns a list of ``ContentStreamInstructions`` instead of a list
         of (operand, operator) tuples. The returned items are duck-type compatible
         with the previous returned items.
-
     """
-
     if not isinstance(page_or_stream, (Object, Page)):
         raise TypeError("stream must be a pikepdf.Object or pikepdf.Page")
 
@@ -103,8 +102,7 @@ def parse_content_stream(
     except PdfError as e:
         if 'supposed to be a stream or an array' in str(e):
             raise TypeError("parse_content_stream called on non-stream Object") from e
-        else:
-            raise e from e
+        raise e from e
 
     return instructions
 
@@ -112,7 +110,8 @@ def parse_content_stream(
 def unparse_content_stream(
     instructions: Collection[UnparseableContentStreamInstructions],
 ) -> bytes:
-    """
+    """Convert collection of instructions to bytes suitable for storing in PDF.
+
     Given a parsed list of instructions/operand-operators, convert to bytes suitable
     for embedding in a PDF. In PDF the operator always follows the operands.
 
@@ -129,9 +128,8 @@ def unparse_content_stream(
         ``ContentStreamInstruction``, ``ContentStreamInlineImage``, and the older
         operand-operator tuples from pikepdf 2.x.
     """
-
     try:
-        return _qpdf._unparse_content_stream(instructions)
+        return _core._unparse_content_stream(instructions)
     except (ValueError, TypeError, RuntimeError) as e:
         raise PdfParsingError(
             "While unparsing a content stream, an error occurred"

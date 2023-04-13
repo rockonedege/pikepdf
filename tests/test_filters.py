@@ -1,6 +1,11 @@
+# SPDX-FileCopyrightText: 2022 James R. Barlow
+# SPDX-License-Identifier: CC0-1.0
+
+from __future__ import annotations
+
 import pytest
 
-from pikepdf import Page, Pdf, PdfError, Token, TokenFilter, TokenType
+from pikepdf import Pdf, PdfError, Token, TokenFilter, TokenType
 
 
 @pytest.fixture
